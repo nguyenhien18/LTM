@@ -1,0 +1,36 @@
+package com.ptit.lanexam.common.dto;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+public class ExamDto {
+    private Long id;
+    private String title;
+    private int durationSeconds;
+    private long deadlineEpochMillis;
+    private Map<Long, String> savedAnswers = new LinkedHashMap<>();
+    private List<QuestionDto> questions = new ArrayList<>();
+
+    public ExamDto() {}
+    public ExamDto(Long id, String title, int durationSeconds, List<QuestionDto> questions) {
+        this.id = id;
+        this.title = title;
+        this.durationSeconds = durationSeconds;
+        this.questions = questions;
+    }
+
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
+    public int getDurationSeconds() { return durationSeconds; }
+    public void setDurationSeconds(int durationSeconds) { this.durationSeconds = durationSeconds; }
+    public long getDeadlineEpochMillis() { return deadlineEpochMillis; }
+    public void setDeadlineEpochMillis(long deadlineEpochMillis) { this.deadlineEpochMillis = deadlineEpochMillis; }
+    public Map<Long, String> getSavedAnswers() { return savedAnswers; }
+    public void setSavedAnswers(Map<Long, String> savedAnswers) { this.savedAnswers = savedAnswers; }
+    public List<QuestionDto> getQuestions() { return questions; }
+    public void setQuestions(List<QuestionDto> questions) { this.questions = questions; }
+}

@@ -1,0 +1,15 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: lan_exam_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: lan_exam
+    ports:
+      - "3306:3306"
+    volumes:
+      - lan_exam_mysql_data:/var/lib/mysql
+
+volumes:
+  lan_exam_mysql_data:
