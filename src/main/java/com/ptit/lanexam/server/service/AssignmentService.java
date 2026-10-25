@@ -21,14 +21,19 @@ import java.util.function.Supplier;
 public class AssignmentService {
     private final Supplier<EntityManager> entityManagers;
     private final Clock clock;
+    private final TeacherScope scope;
     private static final String SUBMISSION_FIELDS =
             "s.id, s.student.studentCode, s.student.fullName, s.content, s.fileName, s.fileSize, s.submittedAt";
 
     public AssignmentService() { this(JpaUtil::em, Clock.systemUTC()); }
     public AssignmentService(Supplier<EntityManager> entityManagers) { this(entityManagers, Clock.systemUTC()); }
     public AssignmentService(Supplier<EntityManager> entityManagers, Clock clock) {
+        this(entityManagers, clock, null);
+    }
+    public AssignmentService(Supplier<EntityManager> entityManagers, Clock clock, Long teacherId) {
         this.entityManagers = entityManagers;
         this.clock = clock;
+        this.scope = new TeacherScope(teacherId);
     }
 
     public Long create(AssignmentDraft draft) {
@@ -46,6 +51,7 @@ public class AssignmentService {
             em.getTransaction().begin();
             Assignment assignment = new Assignment(draft.title().trim(), description, clock.instant(),
                     draft.dueAt(), draft.fileData() == null ? null : draft.fileName(), draft.fileData());
+            scope.assign(assignment);
             em.persist(assignment);
             em.getTransaction().commit();
             return assignment.getId();
@@ -67,15 +73,15 @@ public class AssignmentService {
         try {
             // Project metadata only: listing assignments must not load every attached BLOB.
             List<Object[]> rows = em.createQuery("select a.id, a.title, a.description, a.createdAt, a.dueAt, "
-                    + "a.fileName, a.fileSize from Assignment a order by a.id desc", Object[].class).getResultList();
+                    + "a.fileName, a.fileSize from Assignment a where " + scope.predicate("a") + " order by a.id desc", Object[].class).getResultList();
             Map<Long, Long> counts = new HashMap<>();
             for (Object[] row : em.createQuery("select s.assignment.id, count(s) from AssignmentSubmission s "
-                    + "group by s.assignment.id", Object[].class).getResultList())
+                    + "where " + scope.predicate("s.assignment") + " group by s.assignment.id", Object[].class).getResultList())
                 counts.put((Long) row[0], (Long) row[1]);
             Map<Long, AssignmentSubmissionInfo> mine = new HashMap<>();
             if (studentCode != null) {
                 for (Object[] row : em.createQuery("select s.assignment.id, " + SUBMISSION_FIELDS
-                        + " from AssignmentSubmission s where s.student.studentCode = :code", Object[].class)
+                        + " from AssignmentSubmission s where s.student.studentCode = :code and " + scope.predicate("s.assignment"), Object[].class)
                         .setParameter("code", studentCode).getResultList()) {
                     mine.put((Long) row[0], submissionInfo(row, 1));
                 }
@@ -98,6 +104,7 @@ public class AssignmentService {
             // Serialize submissions for this assignment, including the first submission by a student.
             Assignment assignment = em.find(Assignment.class, request.assignmentId(), LockModeType.PESSIMISTIC_WRITE);
             if (assignment == null) throw new IllegalArgumentException("Không tìm thấy bài tập.");
+            scope.require(assignment);
             Instant now = clock.instant();
             if (assignment.getDueAt() != null && !now.isBefore(assignment.getDueAt()))
                 throw new IllegalStateException("Bài tập đã hết hạn nộp.");
@@ -131,7 +138,7 @@ public class AssignmentService {
         EntityManager em = entityManagers.get();
         try {
             return em.createQuery("select " + SUBMISSION_FIELDS + " from AssignmentSubmission s "
-                            + "where s.assignment.id = :id order by s.submittedAt desc", Object[].class)
+                            + "where s.assignment.id = :id and " + scope.predicate("s.assignment") + " order by s.submittedAt desc", Object[].class)
                     .setParameter("id", assignmentId).getResultList().stream()
                     .map(row -> submissionInfo(row, 0)).toList();
         } finally { em.close(); }
@@ -145,13 +152,14 @@ public class AssignmentService {
         try {
             if (request.submission()) {
                 AssignmentSubmission submission = em.createQuery("select s from AssignmentSubmission s "
-                                + "where s.assignment.id = :id and s.student.studentCode = :code", AssignmentSubmission.class)
+                                + "where s.assignment.id = :id and s.student.studentCode = :code and " + scope.predicate("s.assignment"), AssignmentSubmission.class)
                         .setParameter("id", request.assignmentId()).setParameter("code", studentCode)
                         .getResultStream().findFirst().orElseThrow(() -> new IllegalArgumentException("Bạn chưa nộp bài tập này."));
                 return file(submission.getAssignment().getId(), true, submission.getFileName(), submission.getFileData());
             }
             Assignment assignment = em.find(Assignment.class, request.assignmentId());
             if (assignment == null) throw new IllegalArgumentException("Không tìm thấy bài tập.");
+            scope.require(assignment);
             return file(assignment.getId(), false, assignment.getFileName(), assignment.getFileData());
         } finally { em.close(); }
     }
@@ -161,6 +169,7 @@ public class AssignmentService {
         try {
             AssignmentSubmission submission = submissionId == null ? null : em.find(AssignmentSubmission.class, submissionId);
             if (submission == null) throw new IllegalArgumentException("Không tìm thấy bài nộp.");
+            scope.require(submission.getAssignment());
             return file(submission.getAssignment().getId(), true, submission.getFileName(), submission.getFileData());
         } finally { em.close(); }
     }
@@ -170,6 +179,7 @@ public class AssignmentService {
         try {
             Assignment assignment = assignmentId == null ? null : em.find(Assignment.class, assignmentId);
             if (assignment == null) throw new IllegalArgumentException("Không tìm thấy bài tập.");
+            scope.require(assignment);
             return file(assignment.getId(), false, assignment.getFileName(), assignment.getFileData());
         } finally { em.close(); }
     }

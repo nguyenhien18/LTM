@@ -24,13 +24,15 @@ public class SessionRegistry {
         notifyListener();
     }
 
-    public void updateStatus(String studentCode, ClientStatus status) {
-        ClientSession session = sessions.get(studentCode);
-        if (session != null) {
-            session.setStatus(status);
-            notifyListener();
-        }
+    public void updateExam(String studentCode, ClientHandler handler, Consumer<ClientSession> change) {
+        sessions.computeIfPresent(studentCode, (key, session) -> {
+            if (session.getHandler() == handler) change.accept(session);
+            return session;
+        });
+        notifyListener();
     }
+
+    public ClientSession find(String studentCode) { return sessions.get(studentCode); }
 
     public boolean isCurrent(String studentCode, ClientHandler handler) {
         ClientSession session = sessions.get(studentCode);

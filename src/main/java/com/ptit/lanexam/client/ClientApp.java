@@ -23,6 +23,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.Executors;
@@ -65,6 +66,7 @@ public class ClientApp extends Application {
     private AssignmentPane assignmentPane;
     private Scene dashboardScene;
     private List<AssignmentInfo> assignments = List.of();
+    private final List<Alert> moderationNotices = new ArrayList<>();
 
     @Override
     public void start(Stage stage) {
@@ -106,9 +108,14 @@ public class ClientApp extends Application {
         TextField hostField = new TextField(lastHost);
         TextField portField = new TextField(lastPort);
         TextField studentCodeField = new TextField();
+        hostField.setId("login-host");
+        portField.setId("login-port");
+        studentCodeField.setId("login-code");
         studentCodeField.setPromptText("Ví dụ: B21DCCN001");
         DatePicker birthDatePicker = new DatePicker(LocalDate.of(2003, 5, 12));
+        birthDatePicker.setId("login-birth-date");
         Button loginButton = new Button("Kết nối và đăng nhập");
+        loginButton.setId("login-connect");
         connectionLabel = new Label("Chưa kết nối");
 
         GridPane form = new GridPane();
@@ -210,6 +217,11 @@ public class ClientApp extends Application {
                     case ASSIGNMENT_ERROR -> {
                         if (assignmentPane != null) assignmentPane.fail(message.getPayload().asText());
                     }
+                    case VIOLATION_WARNING -> showModerationNotice(message.getPayload().asText(), false);
+                    case ACCOUNT_LOCKED -> {
+                        logoutToLogin();
+                        showModerationNotice(message.getPayload().asText(), true);
+                    }
                     case ERROR -> {
                         joinPending = false;
                         refreshDashboard();
@@ -254,6 +266,7 @@ public class ClientApp extends Application {
         availableLabel = new Label();
         availableLabel.setWrapText(true);
         joinButton = new Button("Tham gia bài thi");
+        joinButton.setId("join-exam");
         joinButton.setOnAction(e -> joinAvailableExam());
         HBox offer = new HBox(20, availableLabel, joinButton);
         offer.setAlignment(Pos.CENTER_LEFT);
@@ -313,7 +326,8 @@ public class ClientApp extends Application {
             availableLabel.setText("Chưa có bài thi nào đang mở cho bạn. Hãy chờ giảng viên mở bài.");
             joinButton.setDisable(true);
         } else {
-            availableLabel.setText("Đợt #" + availableExam.examId() + " — " + availableExam.title() + " — "
+            availableLabel.setText("Đợt #" + availableExam.examId() + " — "
+                    + (availableExam.subjectName() == null ? "" : availableExam.subjectName() + " — ") + availableExam.title() + " — "
                     + (availableExam.resumable() ? "Tiếp tục bài đang làm" : "Thời gian: "
                     + (availableExam.durationSeconds() / 60) + " phút"));
             joinButton.setText(availableExam.resumable() ? "Tiếp tục bài thi" : "Tham gia bài thi");
@@ -383,9 +397,13 @@ public class ClientApp extends Application {
         draftDebounce = new PauseTransition(Duration.millis(600));
         draftDebounce.setOnFinished(e -> saveDraft());
 
-        Label title = new Label(exam.getTitle());
+        Label title = new Label((exam.getSubjectName() == null ? "" : exam.getSubjectName() + " — ") + exam.getTitle());
+        title.setWrapText(true);
+        title.setMaxWidth(650);
         title.setStyle("-fx-font-size: 20px; -fx-font-weight: bold;");
         Label timerLabel = new Label();
+        timerLabel.setId("exam-timer");
+        timerLabel.setMinWidth(Region.USE_PREF_SIZE);
         timerLabel.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
         updateTimerLabel(timerLabel);
 
@@ -431,6 +449,7 @@ public class ClientApp extends Application {
         }
 
         submitButton = new Button("NỘP BÀI");
+        submitButton.setId("exam-submit");
         submitButton.setOnAction(e -> submitCurrentExam(false));
 
         HBox top = new HBox(20, title, new Region(), timerLabel);
@@ -536,6 +555,7 @@ public class ClientApp extends Application {
 
     private void logoutToLogin() {
         connectionVersion++;
+        for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
         if (draftDebounce != null) draftDebounce.stop();
         stopHeartbeat();
@@ -585,8 +605,23 @@ public class ClientApp extends Application {
         alert.showAndWait();
     }
 
+    private void showModerationNotice(String message, boolean locked) {
+        Alert alert = new Alert(Alert.AlertType.WARNING);
+        alert.initOwner(stage);
+        alert.setTitle(locked ? "Tài khoản đã bị khóa" : "Cảnh báo vi phạm từ giảng viên");
+        alert.setHeaderText(alert.getTitle());
+        alert.setContentText(message);
+        alert.getDialogPane().setPrefWidth(540);
+        alert.getDialogPane().setMinHeight(Region.USE_PREF_SIZE);
+        alert.getDialogPane().setId(locked ? "account-locked-notice" : "violation-warning-notice");
+        moderationNotices.add(alert);
+        alert.setOnHidden(event -> moderationNotices.remove(alert));
+        alert.show(); // Keep the exam timer and subsequent server messages running.
+    }
+
     @Override
     public void stop() {
+        for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
         if (assignmentPane != null) assignmentPane.dispose();
         stopHeartbeat();

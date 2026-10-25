@@ -2,6 +2,7 @@ package com.ptit.lanexam.client.network;
 
 import com.ptit.lanexam.common.JsonUtil;
 import com.ptit.lanexam.common.NetworkMessage;
+import com.ptit.lanexam.common.MessageType;
 import com.ptit.lanexam.common.TransferLimits;
 
 import java.io.*;
@@ -54,7 +55,12 @@ public class LanClient {
         try {
             String line;
             while (isCurrent(connected) && (line = TransferLimits.readLine(connectedReader)) != null) {
-                messageListener.accept(JsonUtil.fromJson(line));
+                NetworkMessage message = JsonUtil.fromJson(line);
+                messageListener.accept(message);
+                if (message.getType() == MessageType.ACCOUNT_LOCKED) {
+                    if (isCurrent(connected)) close();
+                    return; // The explicit lock notification replaces a generic disconnect popup.
+                }
             }
             if (isCurrent(connected)) disconnectListener.accept("Server đã đóng kết nối");
         } catch (Exception e) {

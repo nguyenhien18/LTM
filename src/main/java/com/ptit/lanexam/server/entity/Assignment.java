@@ -5,7 +5,7 @@ import java.time.Instant;
 
 @Entity
 @Table(name = "assignments")
-public class Assignment {
+public class Assignment extends TeacherOwned {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     @Column(nullable = false, length = 200)

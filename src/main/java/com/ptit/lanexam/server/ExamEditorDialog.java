@@ -1,135 +1,148 @@
 package com.ptit.lanexam.server;
 
-import com.ptit.lanexam.server.entity.QuestionType;
-import com.ptit.lanexam.server.service.ExamDraft;
+import com.ptit.lanexam.common.ui.AssignmentUi;
+import com.ptit.lanexam.server.service.*;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
+import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
-import javafx.scene.Node;
 import javafx.scene.control.*;
-import javafx.scene.layout.GridPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
+import javafx.scene.layout.*;
 import javafx.stage.Window;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-final class ExamEditorDialog {
+public final class ExamEditorDialog {
     private ExamEditorDialog() {}
 
-    static Optional<ExamDraft> show(Window owner) {
-        Dialog<ExamDraft> dialog = new Dialog<>();
-        dialog.initOwner(owner);
-        dialog.setTitle("Tạo đề thi");
-        dialog.setHeaderText("Tạo đề mới trong MySQL. Sau khi lưu, chọn đề trong danh sách để mở cho sinh viên.");
-        ButtonType saveType = new ButtonType("Lưu đề thi", ButtonBar.ButtonData.OK_DONE);
-        dialog.getDialogPane().getButtonTypes().addAll(saveType, ButtonType.CANCEL);
-
-        TextField title = new TextField();
-        title.setPromptText("Tên đề thi");
-        Spinner<Integer> duration = new Spinner<>(1, 360, 20);
-        duration.setEditable(true);
-
-        TextArea content = new TextArea();
-        content.setPromptText("Nội dung câu hỏi");
-        content.setPrefRowCount(2);
-        ComboBox<QuestionType> type = new ComboBox<>(FXCollections.observableArrayList(QuestionType.values()));
-        type.setValue(QuestionType.MULTIPLE_CHOICE);
-        TextField optionA = new TextField();
-        TextField optionB = new TextField();
-        TextField optionC = new TextField();
-        TextField optionD = new TextField();
-        TextField answer = new TextField();
-        answer.setPromptText("A, B, C, D hoặc đáp án văn bản");
-        List<TextField> options = List.of(optionA, optionB, optionC, optionD);
-        type.valueProperty().addListener((obs, oldValue, value) -> {
-            boolean text = value == QuestionType.TEXT;
-            options.forEach(field -> field.setDisable(text));
-            answer.setPromptText(text ? "Đáp án văn bản" : "A, B, C hoặc D");
-        });
-
-        GridPane form = new GridPane();
-        form.setHgap(10);
-        form.setVgap(8);
-        form.addRow(0, new Label("Tên đề"), title);
-        form.addRow(1, new Label("Thời gian (phút)"), duration);
-        form.addRow(2, new Label("Loại câu"), type);
-        form.addRow(3, new Label("Câu hỏi"), content);
-        form.addRow(4, new Label("A"), optionA);
-        form.addRow(5, new Label("B"), optionB);
-        form.addRow(6, new Label("C"), optionC);
-        form.addRow(7, new Label("D"), optionD);
-        form.addRow(8, new Label("Đáp án đúng"), answer);
-        title.setPrefWidth(520);
-        content.setPrefWidth(520);
-
-        ObservableList<ExamDraft.QuestionDraft> questions = FXCollections.observableArrayList();
-        ListView<ExamDraft.QuestionDraft> list = new ListView<>(questions);
-        list.setPrefHeight(145);
-        list.setCellFactory(view -> new ListCell<>() {
-            @Override protected void updateItem(ExamDraft.QuestionDraft item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty || item == null ? null : (getIndex() + 1) + ". " + item.content());
-            }
-        });
-        Label error = new Label();
-        error.setStyle("-fx-text-fill: #b00020;");
-        Button add = new Button("Thêm câu hỏi");
-        Button remove = new Button("Xóa câu đã chọn");
-        add.setOnAction(event -> {
-            String problem = validateQuestion(content, type, options, answer);
-            if (problem != null) { error.setText(problem); return; }
-            boolean choice = type.getValue() == QuestionType.MULTIPLE_CHOICE;
-            questions.add(new ExamDraft.QuestionDraft(content.getText().trim(), type.getValue(),
-                    choice ? optionA.getText().trim() : null, choice ? optionB.getText().trim() : null,
-                    choice ? optionC.getText().trim() : null, choice ? optionD.getText().trim() : null,
-                    answer.getText().trim()));
-            content.clear();
-            options.forEach(TextField::clear);
-            answer.clear();
-            error.setText("");
-        });
-        remove.setOnAction(event -> questions.remove(list.getSelectionModel().getSelectedItem()));
-
-        VBox body = new VBox(10, form, new HBox(10, add, remove),
-                new Label("Các câu hỏi đã thêm:"), list, error);
-        body.setPadding(new Insets(12));
-        dialog.getDialogPane().setContent(body);
-        dialog.getDialogPane().setPrefWidth(750);
-        Node saveButton = dialog.getDialogPane().lookupButton(saveType);
-        saveButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
-            try {
-                int minutes = Integer.parseInt(duration.getEditor().getText().trim());
-                if (minutes < 1 || minutes > 360) throw new IllegalArgumentException();
-                duration.getValueFactory().setValue(minutes);
-            } catch (RuntimeException ex) {
-                error.setText("Thời gian làm bài không hợp lệ."); event.consume(); return;
-            }
-            if (title.getText().isBlank() || title.getText().trim().length() > 200) {
-                error.setText("Tên đề phải có từ 1 đến 200 ký tự."); event.consume();
-            } else if (questions.isEmpty()) {
-                error.setText("Hãy bấm Thêm câu hỏi trước khi lưu."); event.consume();
-            } else if (!content.getText().isBlank()) {
-                error.setText("Còn câu hỏi chưa được thêm vào danh sách."); event.consume();
-            }
-        });
-        dialog.setResultConverter(button -> button == saveType
-                ? new ExamDraft(title.getText().trim(), duration.getValue(), List.copyOf(questions)) : null);
-        return dialog.showAndWait();
+    public static Optional<BankExamDraft> show(Window owner, QuestionBankService service) {
+        return create(owner, service).showAndWait();
     }
 
-    private static String validateQuestion(TextArea content, ComboBox<QuestionType> type,
-                                           List<TextField> options, TextField answer) {
-        if (content.getText().isBlank()) return "Nhập nội dung câu hỏi.";
-        if (answer.getText().isBlank() || answer.getText().trim().length() > 500)
-            return "Nhập đáp án đúng, tối đa 500 ký tự.";
-        if (type.getValue() == QuestionType.MULTIPLE_CHOICE) {
-            if (options.stream().anyMatch(field -> field.getText().isBlank() || field.getText().trim().length() > 500))
-                return "Nhập đủ bốn lựa chọn, mỗi lựa chọn tối đa 500 ký tự.";
-            if (!List.of("A", "B", "C", "D").contains(answer.getText().trim().toUpperCase()))
-                return "Đáp án trắc nghiệm phải là A, B, C hoặc D.";
-        }
-        return null;
+    public static Dialog<BankExamDraft> create(Window owner, QuestionBankService service) {
+        Dialog<BankExamDraft> dialog = new Dialog<>();
+        dialog.initOwner(owner);
+        dialog.setTitle("Tạo đề thi từ ngân hàng câu hỏi");
+        dialog.setHeaderText("Chọn câu từ ngân hàng chung. Một câu hỏi có thể được chọn cho nhiều đề thi.");
+        dialog.setResizable(true);
+        ButtonType saveType = new ButtonType("Lưu đề thi", ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(saveType, new ButtonType("Hủy", ButtonBar.ButtonData.CANCEL_CLOSE));
+        TextField title = new TextField();
+        title.setId("exam-title");
+        title.setPromptText("Tên đề thi (tối đa 200 ký tự)");
+        HBox.setHgrow(title, Priority.ALWAYS);
+        Spinner<Integer> duration = new Spinner<>(1, 360, 20);
+        duration.setId("exam-duration");
+        duration.setEditable(true);
+        duration.setPrefWidth(90);
+        HBox form = new HBox(10, new Label("Tên đề"), title, new Label("Thời gian (phút)"), duration);
+        QuestionBankBrowser bank = new QuestionBankBrowser(service);
+        ObservableList<BankQuestionInfo> chosen = FXCollections.observableArrayList();
+        TableView<BankQuestionInfo> selected = new TableView<>(chosen);
+        selected.setId("exam-selected-questions");
+        selected.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+        selected.getColumns().add(AssignmentUi.column("Mã", 55, q -> Long.toString(q.id())));
+        selected.getColumns().add(AssignmentUi.column("Độ khó", 65, q -> Integer.toString(q.difficulty())));
+        selected.getColumns().add(AssignmentUi.column("Câu hỏi", 220, q -> q.content().replaceAll("\\s+", " ")));
+        selected.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        selected.setPlaceholder(new Label("Chưa chọn câu hỏi nào."));
+        TextArea selectedPreview = new TextArea();
+        selectedPreview.setEditable(false);
+        selectedPreview.setWrapText(true);
+        selectedPreview.setPrefRowCount(3);
+        selectedPreview.setPromptText("Chọn một câu trong đề để xem đầy đủ nội dung.");
+        selected.getSelectionModel().selectedItemProperty().addListener((obs, old, question) ->
+                selectedPreview.setText(question == null ? "" : question.preview()));
+        Label count = new Label();
+        count.setId("exam-question-count");
+        count.setWrapText(true);
+        Label error = new Label();
+        error.setWrapText(true);
+        error.setStyle("-fx-text-fill: #b00020;");
+        chosen.addListener((ListChangeListener<BankQuestionInfo>) change -> {
+            count.setText("Đã chọn " + chosen.size() + " câu trắc nghiệm.");
+        });
+        count.setText("Chưa chọn câu hỏi.");
+        bank.setOnSubjectChanged(subject -> {
+            chosen.clear();
+            error.setText("");
+        });
+        bank.setOnQuestionSaved(saved -> {
+            for (int i = 0; i < chosen.size(); i++)
+                if (chosen.get(i).id().equals(saved.id())) {
+                    if (bank.subject() != null && bank.subject().id().equals(saved.subjectId())) chosen.set(i, saved);
+                    else chosen.remove(i);
+                    break;
+                }
+        });
+        Button add = new Button("Thêm câu đã chọn →");
+        add.setId("exam-add-selected");
+        add.setOnAction(event -> {
+            List<BankQuestionInfo> additions = bank.selectedQuestions().stream()
+                    .filter(question -> chosen.stream().noneMatch(q -> q.id().equals(question.id()))).toList();
+            if (bank.selectedQuestions().isEmpty()) { error.setText("Chọn câu hỏi trong ngân hàng trước."); return; }
+            if (chosen.size() + additions.size() > ExamService.MAX_BANK_EXAM_QUESTIONS) {
+                error.setText("Mỗi đề tối đa " + ExamService.MAX_BANK_EXAM_QUESTIONS + " câu."); return;
+            }
+            chosen.addAll(additions);
+            error.setText(additions.isEmpty() ? "Các câu đã chọn đều có trong đề." : "");
+        });
+        Button remove = new Button("Bỏ câu đã chọn");
+        remove.setId("exam-remove-selected");
+        remove.setTooltip(new Tooltip("Chỉ bỏ khỏi đề đang tạo; câu hỏi vẫn còn trong ngân hàng để chọn cho các đề khác."));
+        remove.setOnAction(event -> chosen.removeAll(List.copyOf(selected.getSelectionModel().getSelectedItems())));
+        Button up = new Button("Lên");
+        Button down = new Button("Xuống");
+        up.setId("exam-move-up");
+        down.setId("exam-move-down");
+        up.setOnAction(event -> move(selected, chosen, -1));
+        down.setOnAction(event -> move(selected, chosen, 1));
+        VBox left = new VBox(6, new Label("Ngân hàng câu hỏi chung — chọn môn và lọc độ khó"), bank, add);
+        VBox.setVgrow(bank, Priority.ALWAYS);
+        VBox right = new VBox(8, new Label("Câu hỏi trong đề (theo thứ tự hiển thị)"),
+                selected, new HBox(8, remove, up, down), selectedPreview);
+        right.setPadding(new Insets(8));
+        VBox.setVgrow(selected, Priority.ALWAYS);
+        SplitPane split = new SplitPane(left, right);
+        split.setDividerPositions(0.60);
+        VBox body = new VBox(10, form, split, count, new Label("Đổi môn thi sẽ bỏ các câu đã chọn trong đề."), error);
+        body.setPadding(new Insets(12));
+        VBox.setVgrow(split, Priority.ALWAYS);
+        dialog.getDialogPane().setContent(body);
+        dialog.getDialogPane().setPrefSize(1180, 750);
+        BankExamDraft[] result = {null};
+        dialog.getDialogPane().lookupButton(saveType).setId("exam-save");
+        dialog.getDialogPane().lookupButton(saveType).addEventFilter(ActionEvent.ACTION, event -> {
+            try {
+                if (title.getText().isBlank() || title.getText().trim().length() > 200)
+                    throw new IllegalArgumentException("Tên đề phải có từ 1 đến 200 ký tự.");
+                int minutes;
+                try { minutes = Integer.parseInt(duration.getEditor().getText().trim()); }
+                catch (NumberFormatException ex) { throw new IllegalArgumentException("Thời gian phải là số phút từ 1 đến 360."); }
+                if (minutes < 1 || minutes > 360) throw new IllegalArgumentException("Thời gian làm bài phải từ 1 đến 360 phút.");
+                if (bank.subject() == null) throw new IllegalArgumentException("Chọn môn thi.");
+                if (chosen.isEmpty()) throw new IllegalArgumentException("Chọn ít nhất một câu hỏi để tạo đề.");
+                result[0] = new BankExamDraft(title.getText().trim(), minutes, bank.subject().id(),
+                        chosen.stream().map(BankQuestionInfo::id).toList());
+            } catch (IllegalArgumentException ex) {
+                error.setText(ex.getMessage());
+                event.consume();
+            }
+        });
+        dialog.setResultConverter(button -> button == saveType ? result[0] : null);
+        dialog.setOnHidden(event -> bank.dispose());
+        return dialog;
+    }
+
+    private static void move(TableView<BankQuestionInfo> table, ObservableList<BankQuestionInfo> questions, int delta) {
+        int index = table.getSelectionModel().getSelectedIndex();
+        int next = index + delta;
+        if (index < 0 || next < 0 || next >= questions.size()) return;
+        Collections.swap(questions, index, next);
+        table.getSelectionModel().clearAndSelect(next);
+        table.scrollTo(next);
     }
 }

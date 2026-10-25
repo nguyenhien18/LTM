@@ -15,6 +15,9 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.function.BooleanSupplier;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class ClientHandler implements Runnable {
     private final Socket socket;
@@ -23,11 +26,13 @@ public class ClientHandler implements Runnable {
     private final ExamService examService;
     private final AssignmentService assignmentService;
     private final Supplier<Long> publishedExamId;
+    private final ReadWriteLock attemptGate;
+    private final BooleanSupplier acceptsAttempts;
 
     private BufferedReader reader;
     private BufferedWriter writer;
     private volatile boolean closed;
-    private String studentCode;
+    private volatile String studentCode;
 
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
                          Supplier<Long> publishedExamId) {
@@ -36,12 +41,20 @@ public class ClientHandler implements Runnable {
 
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
                          AssignmentService assignmentService, Supplier<Long> publishedExamId) {
+        this(socket, registry, authService, examService, assignmentService, publishedExamId, new ReentrantReadWriteLock(), () -> true);
+    }
+
+    public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
+                         AssignmentService assignmentService, Supplier<Long> publishedExamId,
+                         ReadWriteLock attemptGate, BooleanSupplier acceptsAttempts) {
         this.socket = socket;
         this.registry = registry;
         this.authService = authService;
         this.examService = examService;
         this.assignmentService = assignmentService;
         this.publishedExamId = publishedExamId;
+        this.attemptGate = attemptGate;
+        this.acceptsAttempts = acceptsAttempts;
     }
 
     @Override
@@ -61,7 +74,7 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private void handle(NetworkMessage message) {
+    private synchronized void handle(NetworkMessage message) {
         try {
             switch (message.getType()) {
                 case LOGIN -> handleLogin(JsonUtil.payload(message, LoginRequest.class));
@@ -99,6 +112,7 @@ public class ClientHandler implements Runnable {
     }
 
     private void handleLogin(LoginRequest request) {
+        if (!acceptsAttempts.getAsBoolean()) { sendError("Server đã dừng."); closeQuietly(); return; }
         if (studentCode != null) {
             sendError("Kết nối này đã đăng nhập.");
             return;
@@ -112,19 +126,35 @@ public class ClientHandler implements Runnable {
         }
 
         Student s = student.get();
+        if (s.isAccountLocked()) {
+            send(JsonUtil.message(MessageType.LOGIN_RESULT, new LoginResponse(false,
+                    "Tài khoản đã bị khóa. Lý do: " + s.getLockReason() + ". Liên hệ giảng viên để mở khóa.", null)));
+            return;
+        }
         studentCode = s.getStudentCode();
         String ip = socket.getInetAddress().getHostAddress();
         registry.register(new ClientSession(s.getStudentCode(), s.getFullName(), ip, this));
+        if (authService.isAccountLocked(studentCode)) {
+            disconnectLocked("Tài khoản đã bị giảng viên khóa. Liên hệ giảng viên để mở khóa.");
+            return;
+        }
         send(JsonUtil.message(MessageType.LOGIN_RESULT,
                 new LoginResponse(true, "Đăng nhập thành công", s.getFullName())));
-        if (examService.getCurrentExamResult(studentCode).isPresent())
-            registry.updateStatus(studentCode, ClientStatus.SUBMITTED);
+        // Login describes this connection; past submissions belong in history.
         sendHistory();
         sendAvailability();
         sendAssignments();
     }
 
     private void handleJoin(JoinExamRequest request) {
+        attemptGate.readLock().lock();
+        try {
+            if (!acceptsAttempts.getAsBoolean()) throw new IllegalStateException("Server đã dừng.");
+            joinExam(request);
+        } finally { attemptGate.readLock().unlock(); }
+    }
+
+    private void joinExam(JoinExamRequest request) {
         if (request == null || request.examId() == null) throw new IllegalArgumentException("Thiếu mã đề thi.");
         ExamOffer offer = examService.findOffer(studentCode, publishedExamId.get())
                 .orElseThrow(() -> new IllegalStateException("Chưa có bài thi nào đang mở cho bạn."));
@@ -144,16 +174,22 @@ public class ClientHandler implements Runnable {
                 new ExamHistoryResponse(examService.listStudentHistory(studentCode))));
     }
 
-    public boolean sendAvailability() {
+    public synchronized boolean sendAvailability() {
         if (studentCode == null || closed || !registry.isCurrent(studentCode, this)) return false;
         Optional<ExamOffer> offer = examService.findOffer(studentCode, publishedExamId.get());
+        if (offer.isPresent() && !offer.get().resumable())
+            registry.updateExam(studentCode, this, session -> session.readyForExam(offer.get().examId()));
         send(JsonUtil.message(MessageType.EXAM_AVAILABLE, new ExamAvailability(offer.orElse(null))));
         return offer.isPresent();
     }
 
     private void handleSubmit(SubmitExamRequest request) {
+        ClientSession current = registry.find(studentCode);
+        if (current != null && current.getStatus() == ClientStatus.DOING_EXAM
+                && (request == null || !java.util.Objects.equals(current.getExamId(), request.getExamId())))
+            throw new IllegalArgumentException("Yêu cầu nộp bài không thuộc đề đang làm trong phiên này.");
         SubmitResult result = examService.submit(studentCode, request);
-        registry.updateStatus(studentCode, ClientStatus.SUBMITTED);
+        registry.updateExam(studentCode, this, session -> session.completeExam(request.getExamId()));
         send(JsonUtil.message(MessageType.SUBMIT_RESULT, result));
         sendHistory();
         sendAvailability();
@@ -162,6 +198,10 @@ public class ClientHandler implements Runnable {
     private void requireLogin(Runnable action) {
         if (studentCode == null || closed || !registry.isCurrent(studentCode, this)) {
             sendError("Bạn chưa đăng nhập");
+            return;
+        }
+        if (authService.isAccountLocked(studentCode)) {
+            disconnectLocked("Tài khoản đã bị giảng viên khóa. Liên hệ giảng viên để mở khóa.");
             return;
         }
         action.run();
@@ -178,14 +218,39 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    public void sendExam(ExamDto exam) {
+    public synchronized void sendExam(ExamDto exam) {
         if (studentCode == null) return;
-        registry.updateStatus(studentCode, ClientStatus.DOING_EXAM);
+        registry.updateExam(studentCode, this, session -> session.startExam(exam));
         send(JsonUtil.message(MessageType.EXAM_STARTED, exam));
     }
 
     private void sendError(String message) {
         send(JsonUtil.message(MessageType.ERROR, message));
+    }
+
+    public synchronized boolean warnViolation(String reason) {
+        if (closed || studentCode == null || !registry.isCurrent(studentCode, this)) return false;
+        send(JsonUtil.message(MessageType.VIOLATION_WARNING, reason));
+        return !closed;
+    }
+
+    public synchronized void disconnectLocked(String reason) {
+        send(JsonUtil.message(MessageType.ACCOUNT_LOCKED, reason));
+        closeQuietly();
+        if (studentCode != null) registry.remove(studentCode, this);
+    }
+
+    public synchronized void refreshExpiredAttempt() {
+        if (closed || studentCode == null || !registry.isCurrent(studentCode, this)) return;
+        ClientSession session = registry.find(studentCode);
+        if (session == null || session.getStatus() != ClientStatus.DOING_EXAM) return;
+        Long examId = session.getExamId();
+        examService.getExamResult(studentCode, examId).ifPresent(result -> {
+            registry.updateExam(studentCode, this, current -> current.completeExam(examId));
+            send(JsonUtil.message(MessageType.SUBMIT_RESULT, result));
+            sendHistory();
+            sendAvailability();
+        });
     }
 
     private void cleanup() {

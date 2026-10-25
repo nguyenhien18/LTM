@@ -2,6 +2,10 @@
 
 Hệ thống dùng **JSON Lines over TCP**: mỗi message là một JSON nằm trên một dòng và kết thúc bằng ký tự xuống dòng.
 
+Giáo viên đăng nhập cục bộ trên máy Server. Các service xử lý TCP của phiên đó được gắn mã giáo viên;
+Client sinh viên giữ nguyên giao thức đăng nhập MSV/ngày sinh và chỉ nhận đề, bài tập, lịch sử trong phạm vi giáo viên đang phụ trách.
+Đổi giáo viên khi không còn lượt đang làm sẽ đóng toàn bộ kết nối cũ; sinh viên kết nối lại sau khi giáo viên mới khởi động Server.
+
 ## Mapping chức năng
 
 | Chức năng | Client -> Server | Server xử lý | Server -> Client |
@@ -18,6 +22,8 @@ Hệ thống dùng **JSON Lines over TCP**: mỗi message là một JSON nằm t
 | Nộp/nộp lại bài tập | `ASSIGNMENT_SUBMIT` | Kiểm tra hạn, nội dung, tệp; lưu một bản nộp cho mỗi học viên/bài tập | `ASSIGNMENT_SUBMITTED`, `ASSIGNMENTS_RESULT` |
 | Tải tệp bài tập | `ASSIGNMENT_FILE_REQUEST` | Trả đề bài hoặc tệp bài nộp của chính học viên | `ASSIGNMENT_FILE_RESULT` |
 | Lỗi bài tập | - | Báo lỗi mà không ngắt kết nối hay thay đổi bài thi | `ASSIGNMENT_ERROR` |
+| Cảnh báo vi phạm | - | Giảng viên nhập nội dung trên Server; gửi riêng đến phiên của sinh viên được chọn | `VIOLATION_WARNING` |
+| Khóa tài khoản | - | Lưu cờ khóa và lý do trong database, thông báo Client rồi ngắt phiên; từ chối đăng nhập lại | `ACCOUNT_LOCKED` |
 | Lỗi | - | Phát hiện lỗi nghiệp vụ/protocol | `ERROR` |
 
 `EXAM_AVAILABLE` chỉ chứa tên đề, mã lượt thi, thời lượng hoặc trạng thái tiếp tục; không chứa câu hỏi. `JOIN_EXAM` gửi mã lượt thi. `EXAM_STARTED` chứa câu hỏi, `durationSeconds` còn lại, `deadlineEpochMillis` và `savedAnswers`. Khi đăng nhập lại, Client thấy nút Tiếp tục bài thi nếu lượt thi còn hạn. Mỗi lần mở lại đề sau khi đợt cũ hoàn tất có mã lượt mới, nên sinh viên làm lại được. `HISTORY_RESULT` chứa các bài đã nộp của đúng sinh viên đang đăng nhập, kể cả các đợt trước. `SUBMIT_EXAM` sau hạn chỉ trả kết quả đã chấm từ bản nháp trên server.
@@ -25,11 +31,17 @@ Hệ thống dùng **JSON Lines over TCP**: mỗi message là một JSON nằm t
 Ví dụ tự lưu và nộp bài (mã câu hỏi là khóa của `answers`):
 
 ```json
-{"type":"SAVE_DRAFT","payload":{"examId":1,"answers":{"1":"B","2":"THREAD"}}}
-{"type":"SUBMIT_EXAM","payload":{"examId":1,"answers":{"1":"B","2":"THREAD"}}}
+{"type":"SAVE_DRAFT","payload":{"examId":1,"answers":{"1":"B","2":"A"}}}
+{"type":"SUBMIT_EXAM","payload":{"examId":1,"answers":{"1":"B","2":"A"}}}
 ```
 
 Thông điệp được gửi theo đúng thứ tự trên cùng một kết nối TCP. Server chỉ nhận đáp án của các câu thuộc đề và giới hạn mỗi đáp án 1000 ký tự.
+
+`VIOLATION_WARNING` và `ACCOUNT_LOCKED` dùng payload là chuỗi thông báo. Cảnh báo tối đa 1.000 ký tự; lý do khóa tối đa 500 ký tự.
+Đây là thông báo từ Server; Client không có quyền yêu cầu cảnh báo hoặc khóa tài khoản qua giao thức.
+Client hiển thị cảnh báo trong khi đồng hồ thi vẫn chạy. Khi nhận `ACCOUNT_LOCKED`, Client dừng màn hình thi,
+trở về đăng nhập và hiện lý do; không hiện thêm popup mất kết nối chung cho cùng sự kiện.
+Mở khóa được thực hiện trực tiếp trên giao diện giảng viên và cập nhật database.
 
 ## Payload và giới hạn truyền tệp
 
@@ -82,4 +94,9 @@ Nhờ mapping này Server biết:
 - socket nào thuộc sinh viên nào;
 - IP của sinh viên;
 - sinh viên đang ONLINE / DOING_EXAM / SUBMITTED;
+- mã lượt và tên đề gắn với trạng thái đang làm/đã nộp;
 - cần gửi đề hoặc dữ liệu về kết nối nào.
+
+Mỗi kết nối đăng nhập mới bắt đầu ở `ONLINE`, dù sinh viên có bài nộp cũ. Bấm tham gia/tiếp tục chuyển sang
+`DOING_EXAM`; nộp hoặc tự chấm hết giờ chuyển sang `SUBMITTED` cho đúng mã lượt đang làm.
+Khi có đợt mới để tham gia, trạng thái đã nộp của đợt trước trở về `ONLINE`. Cập nhật từ handler cũ không thay đổi phiên đăng nhập mới.

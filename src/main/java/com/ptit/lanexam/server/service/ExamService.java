@@ -27,13 +27,72 @@ import java.util.stream.Collectors;
 import java.util.function.Supplier;
 
 public class ExamService {
+    public static final int MAX_BANK_EXAM_QUESTIONS = 200;
     private static final TypeReference<Map<Long, String>> ANSWER_TYPE = new TypeReference<>() {};
     private final Supplier<EntityManager> entityManagers;
+    private final TeacherScope scope;
 
     public ExamService() { this(JpaUtil::em); }
 
     public ExamService(Supplier<EntityManager> entityManagers) {
-        this.entityManagers = entityManagers;
+        this(entityManagers, null);
+    }
+    public ExamService(Supplier<EntityManager> entityManagers, Long teacherId) {
+        this.entityManagers = entityManagers; this.scope = new TeacherScope(teacherId);
+    }
+    public boolean hasOpenAttempts() {
+        try (EntityManager em = entityManagers.get()) {
+            return em.createQuery("select count(a) from ExamAttempt a where " + scope.predicate("a.exam")
+                            + " and a.submittedAt is null and a.deadlineAt > :now", Long.class)
+                    .setParameter("now", Instant.now()).getSingleResult() > 0;
+        }
+    }
+
+    public ExamSummary createExamFromBank(BankExamDraft draft) {
+        if (draft == null || draft.title() == null || draft.title().isBlank() || draft.title().trim().length() > 200)
+            throw new IllegalArgumentException("Tên đề phải có từ 1 đến 200 ký tự.");
+        if (draft.durationMinutes() < 1 || draft.durationMinutes() > 360)
+            throw new IllegalArgumentException("Thời gian làm bài phải từ 1 đến 360 phút.");
+        if (draft.subjectId() == null) throw new IllegalArgumentException("Chọn môn thi.");
+        if (draft.questionIds() == null || draft.questionIds().isEmpty() || draft.questionIds().size() > MAX_BANK_EXAM_QUESTIONS)
+            throw new IllegalArgumentException("Chọn từ 1 đến " + MAX_BANK_EXAM_QUESTIONS + " câu hỏi.");
+        if (draft.questionIds().stream().anyMatch(java.util.Objects::isNull)
+                || draft.questionIds().stream().distinct().count() != draft.questionIds().size())
+            throw new IllegalArgumentException("Danh sách có câu hỏi trùng hoặc không hợp lệ.");
+
+        EntityManager em = entityManagers.get();
+        EntityTransaction tx = em.getTransaction();
+        try {
+            tx.begin();
+            Subject subject = em.find(Subject.class, draft.subjectId());
+            if (subject == null) throw new IllegalArgumentException("Môn thi không tồn tại.");
+            scope.require(subject);
+            Map<Long, BankQuestion> available = em.createQuery("select q from BankQuestion q join fetch q.subject "
+                            + "where q.id in :ids", BankQuestion.class).setParameter("ids", draft.questionIds())
+                    .getResultList().stream().collect(Collectors.toMap(BankQuestion::getId, q -> q));
+            Exam exam = new Exam(draft.title().trim(), draft.durationMinutes(), false);
+            scope.assign(exam);
+            exam.setSubject(subject);
+            for (Long id : draft.questionIds()) {
+                BankQuestion source = available.get(id);
+                if (source == null) throw new IllegalArgumentException("Câu hỏi #" + id + " không còn tồn tại. Hãy làm mới ngân hàng.");
+                scope.require(source);
+                if (!source.getSubject().getId().equals(subject.getId()))
+                    throw new IllegalArgumentException("Mọi câu hỏi trong đề phải thuộc môn thi đã chọn.");
+                if (source.getType() != QuestionType.MULTIPLE_CHOICE)
+                    throw new IllegalArgumentException("Chỉ chọn câu trắc nghiệm để tạo đề.");
+                exam.addQuestion(Question.fromBank(source));
+            }
+            em.persist(exam);
+            em.flush();
+            ExamSummary result = new ExamSummary(exam.getId(), exam.getTitle(), exam.getDurationMinutes(),
+                    exam.getQuestions().size(), false, subject.getName());
+            tx.commit();
+            return result;
+        } catch (RuntimeException ex) {
+            if (tx.isActive()) tx.rollback();
+            throw ex;
+        } finally { em.close(); }
     }
 
     public ExamSummary createExam(ExamDraft draft) {
@@ -44,13 +103,14 @@ public class ExamService {
             throw new IllegalArgumentException("Thời gian làm bài phải từ 1 đến 360 phút.");
         if (draft.questions() == null || draft.questions().isEmpty())
             throw new IllegalArgumentException("Đề thi cần ít nhất một câu hỏi.");
-        for (ExamDraft.QuestionDraft question : draft.questions()) validateQuestion(question);
+        for (ExamDraft.QuestionDraft question : draft.questions()) QuestionRules.validate(question);
 
         EntityManager em = entityManagers.get();
         EntityTransaction tx = em.getTransaction();
         try {
             tx.begin();
             Exam exam = new Exam(draft.title().trim(), draft.durationMinutes(), false);
+            scope.assign(exam);
             for (ExamDraft.QuestionDraft q : draft.questions()) {
                 boolean multipleChoice = q.type() == QuestionType.MULTIPLE_CHOICE;
                 exam.addQuestion(new Question(q.content().trim(), q.type(),
@@ -77,16 +137,18 @@ public class ExamService {
     public List<ExamSummary> listExams() {
         EntityManager em = entityManagers.get();
         try {
-            Long currentTemplateId = em.createQuery("select e from Exam e where e.active = true order by e.id desc", Exam.class)
+            Long currentTemplateId = em.createQuery("select e from Exam e where e.active = true and " + scope.predicate("e") + " order by e.id desc", Exam.class)
                     .setMaxResults(1).getResultList().stream().findFirst()
                     .map(e -> e.getTemplateExamId() == null ? e.getId() : e.getTemplateExamId())
                     .orElse(null);
-            return em.createQuery("select distinct e from Exam e left join fetch e.questions "
-                            + "where e.templateExamId is null "
+            return em.createQuery("select distinct e from Exam e left join fetch e.questions left join fetch e.subject "
+                            + "where " + scope.predicate("e") + " and e.templateExamId is null and not exists "
+                            + "(select q.id from Question q where q.exam = e and q.type <> :choice) "
                             + "order by e.id desc", Exam.class)
+                    .setParameter("choice", QuestionType.MULTIPLE_CHOICE)
                     .getResultList().stream()
                     .map(e -> new ExamSummary(e.getId(), e.getTitle(), e.getDurationMinutes(),
-                            e.getQuestions().size(), e.getId().equals(currentTemplateId)))
+                            e.getQuestions().size(), e.getId().equals(currentTemplateId), e.getSubjectName()))
                     .toList();
         } finally {
             em.close();
@@ -99,17 +161,21 @@ public class ExamService {
         EntityTransaction tx = em.getTransaction();
         try {
             tx.begin();
+            if (scope.teacherId() != null) em.find(Teacher.class, scope.teacherId(), LockModeType.PESSIMISTIC_WRITE);
             Exam template = em.find(Exam.class, examId, LockModeType.PESSIMISTIC_WRITE);
+            scope.require(template);
             if (template == null || template.getTemplateExamId() != null)
                 throw new IllegalArgumentException("Không tìm thấy đề gốc đã chọn.");
             if (template.getQuestions().isEmpty()) throw new IllegalStateException("Bài thi không có câu hỏi.");
-            Exam current = em.createQuery("select e from Exam e where e.active = true order by e.id desc", Exam.class)
+            if (template.getQuestions().stream().anyMatch(q -> q.getType() != QuestionType.MULTIPLE_CHOICE))
+                throw new IllegalStateException("Đề cũ có câu điền đáp án. Hãy tạo đề mới chỉ gồm câu trắc nghiệm.");
+            Exam current = em.createQuery("select e from Exam e where e.active = true and " + scope.predicate("e") + " order by e.id desc", Exam.class)
                     .setMaxResults(1).getResultList().stream().findFirst().orElse(null);
             if (current != null) current = em.find(Exam.class, current.getId(), LockModeType.PESSIMISTIC_WRITE);
             boolean sameTemplate = current != null && (examId.equals(current.getId())
                     || examId.equals(current.getTemplateExamId()));
             long openAttempts = em.createQuery("select count(a) from ExamAttempt a where a.exam.active = true "
-                            + "and a.submittedAt is null and a.deadlineAt > :now", Long.class)
+                            + "and " + scope.predicate("a.exam") + " and a.submittedAt is null and a.deadlineAt > :now", Long.class)
                     .setParameter("now", Instant.now()).getSingleResult();
             if (openAttempts > 0 && !sameTemplate)
                 throw new IllegalStateException("Còn sinh viên đang làm bài hiện tại. Hãy chờ nộp hoặc hết giờ trước khi đổi bài.");
@@ -124,13 +190,13 @@ public class ExamService {
                     return unchanged;
                 }
             }
-            em.createQuery("update Exam e set e.active = false where e.active = true").executeUpdate();
+            em.createQuery("update Exam e set e.active = false where e.active = true and " + scope.predicate("e")).executeUpdate();
             Exam round = new Exam(template.getTitle(), template.getDurationMinutes(), true);
+            scope.assign(round);
+            round.setSubject(template.getSubject());
             round.setTemplateExamId(template.getId());
             for (Question question : template.getQuestions())
-                round.addQuestion(new Question(question.getContent(), question.getType(),
-                        question.getOptionA(), question.getOptionB(), question.getOptionC(),
-                        question.getOptionD(), question.getCorrectAnswer()));
+                round.addQuestion(question.copyForRound());
             em.persist(round);
             em.flush();
             ExamDto result = toDto(round);
@@ -144,25 +210,10 @@ public class ExamService {
         }
     }
 
-    private void validateQuestion(ExamDraft.QuestionDraft q) {
-        if (q == null || q.type() == null || q.content() == null || q.content().isBlank())
-            throw new IllegalArgumentException("Mỗi câu hỏi cần nội dung và loại câu hỏi.");
-        if (q.correctAnswer() == null || q.correctAnswer().isBlank() || q.correctAnswer().trim().length() > 500)
-            throw new IllegalArgumentException("Mỗi câu hỏi cần đáp án đúng tối đa 500 ký tự.");
-        if (q.type() == QuestionType.MULTIPLE_CHOICE) {
-            for (String option : new String[]{q.optionA(), q.optionB(), q.optionC(), q.optionD()}) {
-                if (option == null || option.isBlank() || option.trim().length() > 500)
-                    throw new IllegalArgumentException("Câu trắc nghiệm cần đủ bốn lựa chọn (mỗi lựa chọn tối đa 500 ký tự).");
-            }
-            if (!Set.of("A", "B", "C", "D").contains(q.correctAnswer().trim().toUpperCase(Locale.ROOT)))
-                throw new IllegalArgumentException("Đáp án trắc nghiệm phải là A, B, C hoặc D.");
-        }
-    }
-
     public List<ExamResultRow> listResults() {
         EntityManager em = entityManagers.get();
         try {
-            return em.createQuery("select s from Submission s order by s.submittedAt desc", Submission.class)
+            return em.createQuery("select s from Submission s where " + scope.predicate("s.exam") + " order by s.submittedAt desc", Submission.class)
                     .getResultList().stream()
                     .map(s -> new ExamResultRow(s.getExam().getId(), s.getStudent().getStudentCode(), s.getStudent().getFullName(),
                             s.getExam().getTitle(), s.getScore(),
@@ -178,6 +229,7 @@ public class ExamService {
         EntityManager em = entityManagers.get();
         try {
             return em.createQuery("select s from Submission s where s.student.studentCode = :code "
+                            + "and " + scope.predicate("s.exam") + " "
                             + "order by s.submittedAt desc", Submission.class)
                     .setParameter("code", studentCode).getResultList().stream()
                     .map(s -> new ExamHistoryItem(s.getExam().getId(), s.getExam().getTitle(), s.getScore(),
@@ -194,7 +246,7 @@ public class ExamService {
         try {
             Optional<ExamAttempt> open = em.createQuery("select a from ExamAttempt a "
                             + "where a.student.studentCode = :code and a.submittedAt is null "
-                            + "and a.deadlineAt > :now order by a.startedAt desc", ExamAttempt.class)
+                            + "and " + scope.predicate("a.exam") + " and a.deadlineAt > :now order by a.startedAt desc", ExamAttempt.class)
                     .setParameter("code", studentCode).setParameter("now", Instant.now())
                     .setMaxResults(1).getResultList().stream().findFirst();
             if (open.isPresent()) {
@@ -202,11 +254,12 @@ public class ExamService {
                 Exam exam = attempt.getExam();
                 int seconds = (int) Math.min(Integer.MAX_VALUE,
                         Math.max(0, (attempt.getDeadlineAt().toEpochMilli() - Instant.now().toEpochMilli() + 999) / 1000));
-                return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), seconds, true));
+                return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), seconds, true, exam.getSubjectName()));
             }
             if (publishedExamId == null) return Optional.empty();
             Exam exam = em.find(Exam.class, publishedExamId);
             if (exam == null || !exam.isActive()) return Optional.empty();
+            scope.require(exam);
             long prior = em.createQuery("select count(a) from ExamAttempt a "
                             + "where a.student.studentCode = :code and a.exam = :exam", Long.class)
                     .setParameter("code", studentCode).setParameter("exam", exam).getSingleResult();
@@ -214,7 +267,7 @@ public class ExamService {
                             + "where s.student.studentCode = :code and s.exam = :exam", Long.class)
                     .setParameter("code", studentCode).setParameter("exam", exam).getSingleResult();
             if (prior > 0 || submitted > 0) return Optional.empty();
-            return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), exam.getDurationMinutes() * 60, false));
+            return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), exam.getDurationMinutes() * 60, false, exam.getSubjectName()));
         } finally {
             em.close();
         }
@@ -223,7 +276,7 @@ public class ExamService {
         EntityManager em = entityManagers.get();
         try {
             Exam exam = em.createQuery(
-                            "select distinct e from Exam e left join fetch e.questions where e.active = true order by e.id",
+                            "select distinct e from Exam e left join fetch e.questions where e.active = true and " + scope.predicate("e") + " order by e.id",
                             Exam.class)
                     .setMaxResults(1)
                     .getResultStream()
@@ -269,6 +322,7 @@ public class ExamService {
             Student student = em.createQuery("select s from Student s where s.studentCode = :code", Student.class)
                     .setParameter("code", studentCode).getSingleResult();
             Exam exam = em.find(Exam.class, examId, LockModeType.PESSIMISTIC_WRITE);
+            scope.require(exam);
             if (exam == null || !exam.isActive() || exam.getDurationMinutes() <= 0)
                 throw new IllegalStateException("Đề thi không hợp lệ.");
             long priorSubmissions = em.createQuery("select count(s) from Submission s "
@@ -300,7 +354,7 @@ public class ExamService {
         EntityManager em = entityManagers.get();
         try {
             return em.createQuery("select a from ExamAttempt a where a.student.studentCode = :code "
-                            + "and a.submittedAt is null and a.deadlineAt > :now order by a.startedAt desc", ExamAttempt.class)
+                            + "and " + scope.predicate("a.exam") + " and a.submittedAt is null and a.deadlineAt > :now order by a.startedAt desc", ExamAttempt.class)
                     .setParameter("code", studentCode).setParameter("now", Instant.now())
                     .setMaxResults(1).getResultStream().findFirst().map(this::toDto);
         } finally {
@@ -312,12 +366,21 @@ public class ExamService {
         EntityManager em = entityManagers.get();
         try {
             return em.createQuery("select s from Submission s where s.student.studentCode = :code "
-                            + "and s.exam.active = true order by s.submittedAt desc", Submission.class)
+                            + "and " + scope.predicate("s.exam") + " and s.exam.active = true order by s.submittedAt desc", Submission.class)
                     .setParameter("code", studentCode).setMaxResults(1)
                     .getResultStream().findFirst().map(this::toResult);
         } finally {
             em.close();
         }
+    }
+
+    public Optional<SubmitResult> getExamResult(String studentCode, Long examId) {
+        EntityManager em = entityManagers.get();
+        try {
+            return em.createQuery("select s from Submission s where s.student.studentCode = :code and s.exam.id = :exam and " + scope.predicate("s.exam"), Submission.class)
+                    .setParameter("code", studentCode).setParameter("exam", examId)
+                    .getResultStream().findFirst().map(this::toResult);
+        } finally { em.close(); }
     }
 
     public void saveDraft(String studentCode, SubmitExamRequest request) {
@@ -409,7 +472,7 @@ public class ExamService {
     }
 
     private Optional<ExamAttempt> findAttempt(EntityManager em, String code, Long examId, LockModeType lock) {
-        return em.createQuery("select a from ExamAttempt a where a.student.studentCode = :code and a.exam.id = :examId", ExamAttempt.class)
+        return em.createQuery("select a from ExamAttempt a where a.student.studentCode = :code and a.exam.id = :examId and " + scope.predicate("a.exam"), ExamAttempt.class)
                 .setParameter("code", code).setParameter("examId", examId)
                 .setLockMode(lock).getResultStream().findFirst();
     }
@@ -459,6 +522,8 @@ public class ExamService {
             }
             questions.add(new QuestionDto(q.getId(), q.getContent(), q.getType().name(), options));
         }
-        return new ExamDto(exam.getId(), exam.getTitle(), exam.getDurationMinutes() * 60, questions);
+        ExamDto dto = new ExamDto(exam.getId(), exam.getTitle(), exam.getDurationMinutes() * 60, questions);
+        dto.setSubjectName(exam.getSubjectName());
+        return dto;
     }
 }

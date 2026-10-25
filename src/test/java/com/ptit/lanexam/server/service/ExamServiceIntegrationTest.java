@@ -218,8 +218,8 @@ public class ExamServiceIntegrationTest {
         return new ExamDraft("Teacher exam", 30, List.of(
                 new ExamDraft.QuestionDraft("Choose one", QuestionType.MULTIPLE_CHOICE,
                         "One", "Two", "Three", "Four", "B"),
-                new ExamDraft.QuestionDraft("Write answer", QuestionType.TEXT,
-                        null, null, null, null, "Java")));
+                new ExamDraft.QuestionDraft("Choose language", QuestionType.MULTIPLE_CHOICE,
+                        "Java", "Python", "C", "C++", "A")));
     }
 
     private long submissionCount() {

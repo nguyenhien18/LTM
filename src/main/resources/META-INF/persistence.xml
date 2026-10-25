@@ -4,8 +4,11 @@
         <provider>org.hibernate.jpa.HibernatePersistenceProvider</provider>
 
         <class>com.ptit.lanexam.server.entity.Student</class>
+        <class>com.ptit.lanexam.server.entity.Teacher</class>
         <class>com.ptit.lanexam.server.entity.Exam</class>
         <class>com.ptit.lanexam.server.entity.Question</class>
+        <class>com.ptit.lanexam.server.entity.Subject</class>
+        <class>com.ptit.lanexam.server.entity.BankQuestion</class>
         <class>com.ptit.lanexam.server.entity.Submission</class>
         <class>com.ptit.lanexam.server.entity.StudentAnswer</class>
         <class>com.ptit.lanexam.server.entity.ExamAttempt</class>

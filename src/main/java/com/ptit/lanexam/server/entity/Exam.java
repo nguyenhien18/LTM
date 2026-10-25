@@ -6,13 +6,17 @@ import java.util.List;
 
 @Entity
 @Table(name = "exams")
-public class Exam {
+public class Exam extends TeacherOwned {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(nullable = false, length = 200)
     private String title;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "subject_id")
+    private Subject subject;
 
     @Column(name = "duration_minutes", nullable = false)
     private int durationMinutes;
@@ -42,6 +46,9 @@ public class Exam {
 
     public Long getId() { return id; }
     public String getTitle() { return title; }
+    public Subject getSubject() { return subject; }
+    public void setSubject(Subject subject) { this.subject = subject; }
+    public String getSubjectName() { return subject == null ? null : subject.getName(); }
     public void setTitle(String title) { this.title = title; }
     public int getDurationMinutes() { return durationMinutes; }
     public void setDurationMinutes(int durationMinutes) { this.durationMinutes = durationMinutes; }

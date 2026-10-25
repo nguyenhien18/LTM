@@ -17,6 +17,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class ExamServer {
     private final SessionRegistry registry;
@@ -26,6 +30,8 @@ public class ExamServer {
     private final ExecutorService clientPool = new ThreadPoolExecutor(
             8, 64, 60, TimeUnit.SECONDS, new ArrayBlockingQueue<>(128));
     private final ScheduledExecutorService expiryWorker = Executors.newSingleThreadScheduledExecutor();
+    private final Set<ClientHandler> connections = ConcurrentHashMap.newKeySet();
+    private final ReadWriteLock attemptGate = new ReentrantReadWriteLock(true);
 
     private ServerSocket serverSocket;
     private Thread acceptThread;
@@ -52,7 +58,10 @@ public class ExamServer {
         acceptThread.setDaemon(true);
         acceptThread.start();
         expiryWorker.scheduleWithFixedDelay(() -> {
-            try { examService.finalizeExpiredAttempts(); }
+            try {
+                examService.finalizeExpiredAttempts();
+                for (ClientSession session : registry.allSessions()) session.getHandler().refreshExpiredAttempt();
+            }
             catch (Exception e) { System.err.println("Exam expiry error: " + e.getMessage()); }
         }, 1, 1, TimeUnit.SECONDS);
     }
@@ -64,8 +73,12 @@ public class ExamServer {
                 socket.setKeepAlive(true);
                 socket.setSoTimeout(20000);
                 try {
-                    clientPool.execute(new ClientHandler(socket, registry, authService, examService, assignmentService,
-                            () -> publishedExamId));
+                    ClientHandler handler = new ClientHandler(socket, registry, authService, examService, assignmentService,
+                            () -> publishedExamId, attemptGate, () -> running);
+                    connections.add(handler);
+                    try {
+                        clientPool.execute(() -> { try { handler.run(); } finally { connections.remove(handler); } });
+                    } catch (RejectedExecutionException ex) { connections.remove(handler); throw ex; }
                 } catch (RejectedExecutionException e) {
                     socket.close();
                 }
@@ -90,15 +103,40 @@ public class ExamServer {
 
     public synchronized void stop() {
         running = false;
-        for (ClientSession session : registry.allSessions()) session.getHandler().closeQuietly();
+        for (ClientHandler connection : connections) connection.closeQuietly();
+        connections.clear();
         try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
-        for (Runnable pending : clientPool.shutdownNow()) {
-            if (pending instanceof ClientHandler handler) handler.closeQuietly();
-        }
+        clientPool.shutdownNow();
         expiryWorker.shutdownNow();
     }
 
+    public void stopIfIdle() {
+        attemptGate.writeLock().lock();
+        try {
+            if (examService.hasOpenAttempts())
+                throw new IllegalStateException("Còn sinh viên đang làm bài, kể cả sinh viên đã mất kết nối. Hãy chờ nộp hoặc hết giờ trước khi đổi giáo viên.");
+            stop();
+        } finally { attemptGate.writeLock().unlock(); }
+    }
+
     public boolean isRunning() { return running; }
+
+    public void warnViolation(String studentCode, String reason) {
+        if (!running) throw new IllegalStateException("Server chưa chạy.");
+        if (reason == null || reason.isBlank() || reason.strip().length() > 1000)
+            throw new IllegalArgumentException("Nội dung cảnh báo phải có từ 1 đến 1.000 ký tự.");
+        ClientSession session = registry.find(studentCode);
+        if (session == null || !session.getHandler().warnViolation(reason.strip()))
+            throw new IllegalStateException("Sinh viên không còn online.");
+    }
+
+    public void lockAccount(String studentCode, String reason) {
+        if (!running) throw new IllegalStateException("Server chưa chạy.");
+        authService.setAccountLocked(studentCode, true, reason);
+        ClientSession session = registry.find(studentCode);
+        if (session != null) session.getHandler().disconnectLocked(
+                "Tài khoản đã bị khóa. Lý do: " + reason.strip() + ". Liên hệ giảng viên để mở khóa.");
+    }
 
     public int getPort() { return serverSocket == null ? -1 : serverSocket.getLocalPort(); }
 

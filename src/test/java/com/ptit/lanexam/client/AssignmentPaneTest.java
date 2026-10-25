@@ -4,7 +4,28 @@ import com.ptit.lanexam.common.*;
 import com.ptit.lanexam.common.dto.*;
 import com.ptit.lanexam.common.dto.AssignmentMessages.SubmitRequest;
 import com.ptit.lanexam.server.AssignmentManager;
+import com.ptit.lanexam.server.ExamEditorDialog;
+import com.ptit.lanexam.server.QuestionEditorDialog;
+import com.ptit.lanexam.server.StudentSessionTable;
+import com.ptit.lanexam.server.LockedAccountManager;
+import com.ptit.lanexam.server.ServerApp;
+import com.ptit.lanexam.server.network.*;
+import com.ptit.lanexam.server.entity.Student;
+import com.ptit.lanexam.server.entity.QuestionType;
+import com.ptit.lanexam.server.service.BankExamDraft;
+import com.ptit.lanexam.server.service.BankQuestionDraft;
+import com.ptit.lanexam.server.service.BankQuestionInfo;
+import com.ptit.lanexam.server.service.QuestionBankService;
+import com.ptit.lanexam.server.service.SubjectInfo;
 import com.ptit.lanexam.server.service.AssignmentService;
+import com.ptit.lanexam.server.service.AuthService;
+import com.ptit.lanexam.server.service.ExamService;
+import com.ptit.lanexam.server.service.LockedAccountInfo;
+import com.ptit.lanexam.server.service.TeacherAccountService;
+import com.ptit.lanexam.server.service.ExamDraft;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.Persistence;
+import javafx.collections.FXCollections;
 import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
@@ -19,6 +40,11 @@ import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.Optional;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -121,6 +147,337 @@ class AssignmentPaneTest {
             finalTeacher.close();
             return null;
         });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void questionEditorValidatesDifficultyAndOnlyOffersMultipleChoice() throws Exception {
+        SubjectInfo subject = new SubjectInfo(1L, "Lập trình mạng", 0);
+        fx(() -> {
+            Dialog<BankQuestionDraft> dialog = QuestionEditorDialog.create(null, List.of(subject), subject, null);
+            dialog.show();
+            var pane = dialog.getDialogPane();
+            ((TextArea) pane.lookup("#question-content")).setText("Giao thức nào cung cấp truyền dữ liệu tin cậy?");
+            ((TextField) pane.lookup("#question-option-a")).setText("UDP");
+            ((TextField) pane.lookup("#question-option-b")).setText("IP");
+            ((TextField) pane.lookup("#question-option-c")).setText("TCP");
+            ((TextField) pane.lookup("#question-option-d")).setText("ICMP");
+            ((ComboBox<String>) pane.lookup("#question-choice-answer")).setValue("C");
+            Spinner<Integer> level = (Spinner<Integer>) pane.lookup("#question-difficulty");
+            level.getEditor().setText("7");
+            ((Button) pane.lookup("#question-save")).fire();
+            assertTrue(dialog.isShowing(), "Độ khó ngoài 1–6 không được lưu.");
+            level.getEditor().setText("6");
+            snapshot(pane, "question-editor");
+            ((Button) pane.lookup("#question-save")).fire();
+            assertEquals(6, dialog.getResult().difficulty());
+            assertEquals("C", dialog.getResult().question().correctAnswer());
+            assertEquals(QuestionType.MULTIPLE_CHOICE, dialog.getResult().question().type());
+            assertNull(pane.lookup("#question-type"));
+            assertNull(pane.lookup("#question-text-answer"));
+            return null;
+        });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void composingExamKeepsSelectionsAcrossFiltersButClearsThemOnSubjectChange() throws Exception {
+        List<SubjectInfo> subjects = List.of(new SubjectInfo(1L, "Lập trình mạng", 3), new SubjectInfo(2L, "Cơ sở dữ liệu", 1));
+        List<BankQuestionInfo> questions = List.of(
+                new BankQuestionInfo(101L, 1L, "Lập trình mạng", 1, "Giao thức nào truyền dữ liệu tin cậy?", QuestionType.MULTIPLE_CHOICE,
+                        "TCP", "UDP", "IP", "ICMP", "A"),
+                new BankQuestionInfo(102L, 1L, "Lập trình mạng", 6, "Kỹ thuật nào tránh xử lý đồng thời gây mất dữ liệu?", QuestionType.MULTIPLE_CHOICE,
+                        "Đóng socket", "Đồng bộ hóa", "Tăng timeout", "Bỏ kiểm tra", "B"),
+                new BankQuestionInfo(103L, 1L, "Lập trình mạng", 3, "Lớp Java dùng để kết nối TCP?", QuestionType.MULTIPLE_CHOICE,
+                        "Socket", "Scanner", "Thread", "String", "A"),
+                new BankQuestionInfo(201L, 2L, "Cơ sở dữ liệu", 2, "Ngôn ngữ truy vấn cơ sở dữ liệu?", QuestionType.MULTIPLE_CHOICE,
+                        "Java", "SQL", "C", "Python", "B"));
+        QuestionBankService sample = new QuestionBankService() {
+            @Override public List<SubjectInfo> listSubjects() { return subjects; }
+            @Override public List<BankQuestionInfo> listQuestions(Long subject, Integer level) {
+                return questions.stream().filter(q -> q.subjectId().equals(subject))
+                        .filter(q -> level == null || q.difficulty() == level).toList();
+            }
+        };
+        Dialog<BankExamDraft> dialog = fx(() -> {
+            var created = ExamEditorDialog.create(null, sample);
+            created.show();
+            return created;
+        });
+        awaitFx(() -> bankTable(dialog).getItems().size() == 3 && bankReady(dialog));
+        fx(() -> {
+            bankTable(dialog).getSelectionModel().selectIndices(0, 1);
+            ((Button) dialog.getDialogPane().lookup("#exam-add-selected")).fire();
+            ((Button) dialog.getDialogPane().lookup("#exam-add-selected")).fire();
+            assertEquals(2, selectedTable(dialog).getItems().size(), "Không thêm trùng câu hỏi.");
+            ((ComboBox<Integer>) dialog.getDialogPane().lookup("#bank-difficulty")).setValue(6);
+            return null;
+        });
+        awaitFx(() -> bankTable(dialog).getItems().size() == 1 && bankReady(dialog));
+        fx(() -> {
+            assertEquals(102L, bankTable(dialog).getItems().getFirst().id());
+            assertEquals(2, selectedTable(dialog).getItems().size(), "Lọc không được làm mất câu đã chọn.");
+            assertNull(dialog.getDialogPane().lookup("#bank-type"));
+            ((ComboBox<Integer>) dialog.getDialogPane().lookup("#bank-difficulty")).setValue(0);
+            return null;
+        });
+        awaitFx(() -> bankTable(dialog).getItems().size() == 3 && bankReady(dialog));
+        fx(() -> {
+            bankTable(dialog).getSelectionModel().clearAndSelect(2);
+            ((Button) dialog.getDialogPane().lookup("#exam-add-selected")).fire();
+            assertEquals(3, selectedTable(dialog).getItems().size());
+            selectedTable(dialog).getSelectionModel().clearAndSelect(1);
+            ((Button) dialog.getDialogPane().lookup("#exam-move-up")).fire();
+            assertEquals(102L, selectedTable(dialog).getItems().getFirst().id());
+            ((TextField) dialog.getDialogPane().lookup("#exam-title")).setText("Kiểm tra Lập trình mạng");
+            snapshot(dialog.getDialogPane(), "exam-from-question-bank");
+            ((ComboBox<SubjectInfo>) dialog.getDialogPane().lookup("#bank-subject")).setValue(subjects.get(1));
+            assertTrue(selectedTable(dialog).getItems().isEmpty(), "Đổi môn phải bỏ câu của môn trước.");
+            return null;
+        });
+        awaitFx(() -> bankTable(dialog).getItems().size() == 1 && bankReady(dialog));
+        fx(() -> {
+            bankTable(dialog).getSelectionModel().selectFirst();
+            ((Button) dialog.getDialogPane().lookup("#exam-add-selected")).fire();
+            ((TextField) dialog.getDialogPane().lookup("#exam-title")).setText("Kiểm tra CSDL");
+            ((Button) dialog.getDialogPane().lookup("#exam-save")).fire();
+            assertEquals(2L, dialog.getResult().subjectId());
+            assertEquals(List.of(201L), dialog.getResult().questionIds());
+            return null;
+        });
+    }
+
+    @Test
+    void teacherTableShowsExamAndButtonsFollowTheCurrentStudentRow() throws Exception {
+        fx(() -> {
+            var rows = FXCollections.observableArrayList(
+                    new ClientSessionInfo("ST001", "Nguyễn Văn An", "192.168.1.11", "DOING_EXAM", 101L, "Đề Lập trình mạng 1"),
+                    new ClientSessionInfo("ST002", "Trần Minh Bình", "192.168.1.12", "SUBMITTED", 101L, "Đề Lập trình mạng 1"));
+            BlockingQueue<String> actions = new LinkedBlockingQueue<>();
+            StudentSessionTable table = new StudentSessionTable(rows,
+                    row -> actions.add("warn:" + row.studentCode()), row -> actions.add("lock:" + row.studentCode()));
+            new Scene(table, 1180, 360);
+            snapshot(table, "student-moderation-table");
+            studentAction(table, "ST001", "#student-warn").fire();
+            assertEquals("warn:ST001", actions.poll());
+            rows.set(0, new ClientSessionInfo("ST003", "Lê Hoàng Cường", "192.168.1.13", "ONLINE", null, null));
+            table.applyCss();
+            table.layout();
+            studentAction(table, "ST003", "#student-lock").fire();
+            assertEquals("lock:ST003", actions.poll(), "Nút phải thao tác với sinh viên hiện tại sau khi bảng làm mới.");
+            return null;
+        });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void clientShowsTeacherWarningAndReturnsToLoginWhenLockedAndTeacherCanUnlock() throws Exception {
+        AtomicBoolean locked = new AtomicBoolean();
+        Student student = new Student("ST001", "Nguyễn Văn An", LocalDate.of(2003, 5, 12));
+        AuthService auth = new AuthService() {
+            @Override public Optional<Student> authenticate(String code, String birthDate) { return Optional.of(student); }
+            @Override public boolean isAccountLocked(String code) { return locked.get(); }
+            @Override public void setAccountLocked(String code, boolean value, String reason) { locked.set(value); }
+            @Override public List<LockedAccountInfo> listLockedAccounts() {
+                return locked.get() ? List.of(new LockedAccountInfo("ST001", "Nguyễn Văn An", "Vi phạm quy chế")) : List.of();
+            }
+        };
+        ExamDto exam = new ExamDto(101L, "Đề kiểm tra mạng", 120, List.of(
+                new QuestionDto(1L, "Giao thức tin cậy?", "MULTIPLE_CHOICE", List.of("A. TCP", "B. UDP", "C. IP", "D. ICMP"))));
+        ExamService exams = new ExamService() {
+            @Override public void finalizeExpiredAttempts() {}
+            @Override public Optional<SubmitResult> getExamResult(String code, Long id) { return Optional.empty(); }
+            @Override public List<ExamHistoryItem> listStudentHistory(String code) { return List.of(); }
+            @Override public Optional<ExamOffer> findOffer(String code, Long id) { return Optional.of(new ExamOffer(101L, exam.getTitle(), 120, false)); }
+            @Override public Optional<ExamDto> startAttempt(String code, Long id) { return Optional.of(exam); }
+            @Override public void saveDraft(String code, SubmitExamRequest request) {}
+        };
+        SessionRegistry registry = new SessionRegistry();
+        ExamServer server = new ExamServer(registry, auth, exams, new AssignmentService() {
+            @Override public List<AssignmentInfo> listForStudent(String code) { return List.of(); }
+        });
+        server.start(0);
+        ClientApp app = new ClientApp();
+        Stage clientStage = fx(() -> {
+            Stage created = new Stage();
+            app.start(created);
+            ((TextField) created.getScene().lookup("#login-code")).setText("ST001");
+            ((TextField) created.getScene().lookup("#login-port")).setText(Integer.toString(server.getPort()));
+            ((Button) created.getScene().lookup("#login-connect")).fire();
+            return created;
+        });
+        try {
+            awaitFx(() -> clientStage.getScene().lookup("#join-exam") instanceof Button join && !join.isDisabled());
+            fx(() -> { ((Button) clientStage.getScene().lookup("#join-exam")).fire(); return null; });
+            awaitFx(() -> clientStage.getScene().lookup("#exam-submit") != null);
+            fx(() -> { ((RadioButton) clientStage.getScene().getRoot().lookupAll(".radio-button").iterator().next()).fire(); return null; });
+            server.warnViolation("ST001", "Không trao đổi bài với bạn bên cạnh.");
+            awaitFx(() -> notice("#violation-warning-notice") != null);
+            fx(() -> {
+                DialogPane pane = notice("#violation-warning-notice");
+                assertEquals("Không trao đổi bài với bạn bên cạnh.", pane.getContentText());
+                assertNotNull(clientStage.getScene().lookup("#exam-timer"));
+                assertTrue(clientStage.getScene().getRoot().lookupAll(".radio-button").stream().anyMatch(node -> ((RadioButton) node).isSelected()));
+                snapshot(pane, "client-violation-warning");
+                ((Button) pane.lookupButton(ButtonType.OK)).fire();
+                return null;
+            });
+            server.lockAccount("ST001", "Vi phạm quy chế");
+            awaitFx(() -> notice("#account-locked-notice") != null && clientStage.getScene().lookup("#login-connect") != null);
+            fx(() -> {
+                assertNull(clientStage.getScene().lookup("#exam-submit"));
+                assertTrue(notice("#account-locked-notice").getContentText().contains("Vi phạm quy chế"));
+                snapshot(notice("#account-locked-notice"), "client-account-locked");
+                assertTrue(Window.getWindows().stream().noneMatch(window -> window instanceof Stage stage && "Mất kết nối".equals(stage.getTitle())));
+                ((Button) notice("#account-locked-notice").lookupButton(ButtonType.OK)).fire();
+                LockedAccountManager.show(clientStage, auth);
+                return null;
+            });
+            awaitFx(() -> lockedAccountStage() != null && !((TableView<?>) lockedAccountStage().getScene().lookup("#locked-accounts")).getItems().isEmpty());
+            fx(() -> {
+                Stage manager = lockedAccountStage();
+                ((TableView<LockedAccountInfo>) manager.getScene().lookup("#locked-accounts")).getSelectionModel().selectFirst();
+                ((Button) manager.getScene().lookup("#account-unlock")).fire();
+                return null;
+            });
+            awaitFx(() -> !locked.get() && ((TableView<?>) lockedAccountStage().getScene().lookup("#locked-accounts")).getItems().isEmpty());
+            fx(() -> { lockedAccountStage().close(); return null; });
+        } finally {
+            fx(() -> { app.stop(); clientStage.close(); if (lockedAccountStage() != null) lockedAccountStage().close(); return null; });
+            server.stop();
+        }
+    }
+
+    @Test
+    void teachersRegisterLoginSeeTheirNameAndSwitchOnlyAfterTheExamEnds() throws Exception {
+        EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:teacher_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"));
+        try (var em = factory.createEntityManager()) {
+            em.getTransaction().begin(); em.persist(new Student("ST001", "Nguyễn An", LocalDate.of(2003, 5, 12))); em.getTransaction().commit();
+        }
+        ServerApp app = new ServerApp(factory::createEntityManager, () -> {});
+        Stage stage = fx(() -> { Stage created = new Stage(); app.start(created); return created; });
+        try {
+            awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+            fx(() -> { snapshot(stage.getScene().getRoot(), "teacher-login"); return null; });
+            createTeacherInUi(stage, "gv01", "Nguyễn Thị Lan");
+            fx(() -> {
+                ((TextField) stage.getScene().lookup("#teacher-login-username")).setText("gv01");
+                ((PasswordField) stage.getScene().lookup("#teacher-login-password")).setText("SaiMatKhau");
+                ((Button) stage.getScene().lookup("#teacher-login-submit")).fire(); return null;
+            });
+            awaitFx(() -> ((Label) stage.getScene().lookup("#teacher-login-message")).getText().contains("không đúng"));
+            loginTeacherInUi(stage, "gv01");
+            fx(() -> {
+                assertTrue(((Label) stage.getScene().lookup("#active-teacher")).getText().contains("Nguyễn Thị Lan (gv01)"));
+                assertNotNull(stage.getScene().lookup("#server-start"));
+                snapshot(stage.getScene().getRoot(), "teacher-server-workspace");
+                return null;
+            });
+            var teacher = new TeacherAccountService(factory::createEntityManager).authenticate("gv01", "Matkhau123!").orElseThrow();
+            ExamService exams = new ExamService(factory::createEntityManager, teacher.id());
+            var template = exams.createExam(new ExamDraft("Đề đang làm", 20, List.of(new ExamDraft.QuestionDraft(
+                    "Chọn A", QuestionType.MULTIPLE_CHOICE, "Một", "Hai", "Ba", "Bốn", "A"))));
+            var round = exams.activateExam(template.id());
+            exams.startAttempt("ST001", round.getId());
+            fx(() -> { ((Button) stage.getScene().lookup("#teacher-logout")).fire(); return null; });
+            awaitFx(() -> notice("#server-error-notice") != null);
+            fx(() -> {
+                assertTrue(notice("#server-error-notice").getContentText().contains("Còn sinh viên đang làm bài"));
+                assertNotNull(stage.getScene().lookup("#active-teacher"));
+                snapshot(notice("#server-error-notice"), "teacher-switch-blocked");
+                ((Button) notice("#server-error-notice").lookupButton(ButtonType.OK)).fire(); return null;
+            });
+            exams.submit("ST001", new SubmitExamRequest(round.getId(), Map.of()));
+            fx(() -> { ((Button) stage.getScene().lookup("#teacher-logout")).fire(); return null; });
+            awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+            createTeacherInUi(stage, "gv02", "Trần Văn Minh");
+            loginTeacherInUi(stage, "gv02");
+            fx(() -> {
+                assertTrue(((Label) stage.getScene().lookup("#active-teacher")).getText().contains("Trần Văn Minh (gv02)"));
+                ((Button) stage.getScene().lookup("#teacher-logout")).fire(); return null;
+            });
+            awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+            loginTeacherInUi(stage, "gv01");
+            fx(() -> {
+                assertTrue(((Label) stage.getScene().lookup("#active-teacher")).getText().contains("Nguyễn Thị Lan (gv01)")); return null;
+            });
+        } finally {
+            fx(() -> {
+                Window.getWindows().stream().filter(w -> w instanceof Stage child && child.getOwner() == stage)
+                        .map(w -> (Stage) w).toList().forEach(Stage::close);
+                app.stop(); stage.close(); return null;
+            });
+            factory.close();
+        }
+    }
+
+    private static void createTeacherInUi(Stage stage, String username, String fullName) throws Exception {
+        fx(() -> {
+            Platform.runLater(() -> ((Button) stage.getScene().lookup("#teacher-login-create")).fire()); return null;
+        });
+        awaitFx(() -> notice("#teacher-register-dialog") != null);
+        fx(() -> {
+            DialogPane pane = notice("#teacher-register-dialog");
+            ((TextField) pane.lookup("#teacher-register-username")).setText(username);
+            ((TextField) pane.lookup("#teacher-register-name")).setText(fullName);
+            ((PasswordField) pane.lookup("#teacher-register-password")).setText("Matkhau123!");
+            ((PasswordField) pane.lookup("#teacher-register-confirm")).setText("KhongKhop");
+            ((Button) pane.lookup("#teacher-register-save")).fire();
+            assertNotNull(notice("#teacher-register-dialog"), "Mật khẩu xác nhận không khớp thì chưa được lưu.");
+            ((PasswordField) pane.lookup("#teacher-register-confirm")).setText("Matkhau123!");
+            ((Button) pane.lookup("#teacher-register-save")).fire(); return null;
+        });
+        awaitFx(() -> ((Label) stage.getScene().lookup("#teacher-login-message")).getText().contains("Đã tạo tài khoản"));
+    }
+
+    private static void loginTeacherInUi(Stage stage, String username) throws Exception {
+        fx(() -> {
+            ((TextField) stage.getScene().lookup("#teacher-login-username")).setText(username);
+            ((PasswordField) stage.getScene().lookup("#teacher-login-password")).setText("Matkhau123!");
+            ((Button) stage.getScene().lookup("#teacher-login-submit")).fire(); return null;
+        });
+        awaitFx(() -> stage.getScene().lookup("#active-teacher") != null);
+    }
+
+    private static Button studentAction(StudentSessionTable table, String code, String selector) {
+        return table.lookupAll(".table-row-cell").stream().filter(node -> node instanceof TableRow<?> row
+                && row.getItem() instanceof ClientSessionInfo info && code.equals(info.studentCode()))
+                .map(node -> (Button) node.lookup(selector)).filter(java.util.Objects::nonNull).findFirst().orElseThrow();
+    }
+
+    private static DialogPane notice(String selector) {
+        return Window.getWindows().stream().map(Window::getScene).filter(java.util.Objects::nonNull)
+                .map(scene -> scene.lookup(selector)).filter(java.util.Objects::nonNull)
+                .map(node -> (DialogPane) node).findFirst().orElse(null);
+    }
+
+    private static Stage lockedAccountStage() {
+        return Window.getWindows().stream().filter(w -> w instanceof Stage stage && "Tài khoản bị khóa".equals(stage.getTitle()))
+                .map(w -> (Stage) w).findFirst().orElse(null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static TableView<BankQuestionInfo> bankTable(Dialog<?> dialog) {
+        return (TableView<BankQuestionInfo>) dialog.getDialogPane().lookup("#bank-questions");
+    }
+    @SuppressWarnings("unchecked")
+    private static TableView<BankQuestionInfo> selectedTable(Dialog<?> dialog) {
+        return (TableView<BankQuestionInfo>) dialog.getDialogPane().lookup("#exam-selected-questions");
+    }
+    private static boolean bankReady(Dialog<?> dialog) {
+        return ((Label) dialog.getDialogPane().lookup("#bank-load-status")).getText().contains("câu phù hợp");
+    }
+    private static void awaitFx(Supplier<Boolean> condition) throws Exception {
+        long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+        while (System.nanoTime() < end) {
+            if (fx(condition)) return;
+            Thread.sleep(25);
+        }
+        fail("Giao diện không cập nhật danh sách câu hỏi đúng hạn.");
     }
 
     private static AssignmentInfo task(AssignmentSubmissionInfo mine) {

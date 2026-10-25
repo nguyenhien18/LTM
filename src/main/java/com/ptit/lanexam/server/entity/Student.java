@@ -19,6 +19,12 @@ public class Student {
     @Column(name = "birth_date", nullable = false)
     private LocalDate birthDate;
 
+    @Column(name = "account_locked", nullable = false, columnDefinition = "boolean default false")
+    private boolean accountLocked;
+
+    @Column(name = "lock_reason", length = 500)
+    private String lockReason;
+
     public Student() {}
     public Student(String studentCode, String fullName, LocalDate birthDate) {
         this.studentCode = studentCode;
@@ -33,4 +39,10 @@ public class Student {
     public void setFullName(String fullName) { this.fullName = fullName; }
     public LocalDate getBirthDate() { return birthDate; }
     public void setBirthDate(LocalDate birthDate) { this.birthDate = birthDate; }
+    public boolean isAccountLocked() { return accountLocked; }
+    public String getLockReason() { return lockReason; }
+    public void setAccountLock(boolean locked, String reason) {
+        this.accountLocked = locked;
+        this.lockReason = locked ? reason : null;
+    }
 }

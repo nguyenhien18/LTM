@@ -8,6 +8,7 @@ import java.util.Map;
 public class ExamDto {
     private Long id;
     private String title;
+    private String subjectName;
     private int durationSeconds;
     private long deadlineEpochMillis;
     private Map<Long, String> savedAnswers = new LinkedHashMap<>();
@@ -25,6 +26,8 @@ public class ExamDto {
     public void setId(Long id) { this.id = id; }
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }
+    public String getSubjectName() { return subjectName; }
+    public void setSubjectName(String subjectName) { this.subjectName = subjectName; }
     public int getDurationSeconds() { return durationSeconds; }
     public void setDurationSeconds(int durationSeconds) { this.durationSeconds = durationSeconds; }
     public long getDeadlineEpochMillis() { return deadlineEpochMillis; }

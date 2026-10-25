@@ -26,6 +26,7 @@ final class ExamSelectionDialog {
         TableView<ExamSummary> table = new TableView<>(FXCollections.observableArrayList(exams));
         table.getColumns().add(column("Mã đề", 75, item -> Long.toString(item.id())));
         table.getColumns().add(column("Tên bài thi", 335, ExamSummary::title));
+        table.getColumns().add(column("Môn thi", 160, item -> item.subjectName() == null ? "Chưa phân loại" : item.subjectName()));
         table.getColumns().add(column("Thời gian", 100, item -> item.durationMinutes() + " phút"));
         table.getColumns().add(column("Số câu", 75, item -> Integer.toString(item.questionCount())));
         table.getColumns().add(column("Trạng thái", 125,
@@ -44,7 +45,7 @@ final class ExamSelectionDialog {
         VBox body = new VBox(10, new Label("Chọn một hàng trong danh sách bài thi MySQL:"), table);
         body.setPadding(new Insets(12));
         dialog.getDialogPane().setContent(body);
-        dialog.getDialogPane().setPrefWidth(780);
+        dialog.getDialogPane().setPrefWidth(960);
         dialog.setResultConverter(button -> button == openType
                 ? table.getSelectionModel().getSelectedItem() : null);
         return dialog.showAndWait();

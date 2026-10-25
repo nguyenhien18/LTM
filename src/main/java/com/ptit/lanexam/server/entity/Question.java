@@ -32,6 +32,11 @@ public class Question {
     @Column(name = "correct_answer", nullable = false, length = 500)
     private String correctAnswer;
 
+    // Nullable metadata keeps existing exams compatible; question text/answers are immutable exam snapshots.
+    @Column(name = "bank_question_id")
+    private Long bankQuestionId;
+    private Integer difficulty;
+
     public Question() {}
 
     public Question(String content, QuestionType type, String optionA, String optionB,
@@ -55,4 +60,21 @@ public class Question {
     public String getOptionC() { return optionC; }
     public String getOptionD() { return optionD; }
     public String getCorrectAnswer() { return correctAnswer; }
+    public Long getBankQuestionId() { return bankQuestionId; }
+    public Integer getDifficulty() { return difficulty; }
+
+    public static Question fromBank(BankQuestion source) {
+        Question snapshot = new Question(source.getContent(), source.getType(), source.getOptionA(), source.getOptionB(),
+                source.getOptionC(), source.getOptionD(), source.getCorrectAnswer());
+        snapshot.bankQuestionId = source.getId();
+        snapshot.difficulty = source.getDifficulty();
+        return snapshot;
+    }
+
+    public Question copyForRound() {
+        Question copy = new Question(content, type, optionA, optionB, optionC, optionD, correctAnswer);
+        copy.bankQuestionId = bankQuestionId;
+        copy.difficulty = difficulty;
+        return copy;
+    }
 }
