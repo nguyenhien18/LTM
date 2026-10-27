@@ -13,27 +13,29 @@ Client sinh viên giữ nguyên giao thức đăng nhập MSV/ngày sinh và ch�
 | Đăng nhập | `LOGIN` | Kiểm tra MSV + ngày sinh, tra lịch sử, bài đang mở và bài tập | `LOGIN_RESULT`, `HISTORY_RESULT`, `EXAM_AVAILABLE`, `ASSIGNMENTS_RESULT` |
 | Giữ kết nối | `PING` | Xác nhận socket còn sống | `PONG` |
 | Mở bài thi | - | Server công bố thông tin đề đang mở, chưa tạo lượt thi | `EXAM_AVAILABLE` |
-| Tham gia/tiếp tục | `JOIN_EXAM` | Kiểm tra quyền tham gia, tạo hoặc dùng lại lượt thi | `EXAM_STARTED` |
+| Tham gia/làm lại | `JOIN_EXAM` | Kiểm tra hạn chung, tạo hoặc dùng lại lượt thi và xóa lựa chọn cũ | `EXAM_STARTED` |
 | Xem lịch sử | `HISTORY_REQUEST` | Lấy các bài đã nộp của sinh viên đang đăng nhập | `HISTORY_RESULT` |
-| Tự lưu bài | `SAVE_DRAFT` | Lưu đáp án trong lượt thi còn hạn | - |
+| Cập nhật lựa chọn | `ANSWER_UPDATE` | Giữ lựa chọn của phiên hiện tại trong RAM để chấm hết giờ; không lưu nháp MySQL | - |
 | Nộp bài | `SUBMIT_EXAM` | Chấm điểm + lưu DB | `SUBMIT_RESULT` |
 | Xem bài tập | `ASSIGNMENTS_REQUEST` | Lấy bài tập và bản nộp của đúng học viên đang đăng nhập | `ASSIGNMENTS_RESULT` |
 | Giao bài tập | - | Giảng viên tạo bài trên Server, báo Client tải lại danh sách | `ASSIGNMENTS_CHANGED` |
-| Nộp/nộp lại bài tập | `ASSIGNMENT_SUBMIT` | Kiểm tra hạn, nội dung, tệp; lưu một bản nộp cho mỗi học viên/bài tập | `ASSIGNMENT_SUBMITTED`, `ASSIGNMENTS_RESULT` |
+| Nộp/nộp lại bài tập | `ASSIGNMENT_SUBMIT` | Xét hạn và lưu giờ nộp theo thời điểm Server nhận đủ thông điệp, trước hàng đợi; kiểm tra nội dung, tệp; lưu một bản nộp cho mỗi học viên/bài tập | `ASSIGNMENT_SUBMITTED`, `ASSIGNMENTS_RESULT` |
 | Tải tệp bài tập | `ASSIGNMENT_FILE_REQUEST` | Trả đề bài hoặc tệp bài nộp của chính học viên | `ASSIGNMENT_FILE_RESULT` |
 | Lỗi bài tập | - | Báo lỗi mà không ngắt kết nối hay thay đổi bài thi | `ASSIGNMENT_ERROR` |
 | Cảnh báo vi phạm | - | Giảng viên nhập nội dung trên Server; gửi riêng đến phiên của sinh viên được chọn | `VIOLATION_WARNING` |
 | Khóa tài khoản | - | Lưu cờ khóa và lý do trong database, thông báo Client rồi ngắt phiên; từ chối đăng nhập lại | `ACCOUNT_LOCKED` |
 | Lỗi | - | Phát hiện lỗi nghiệp vụ/protocol | `ERROR` |
 
-`EXAM_AVAILABLE` chỉ chứa tên đề, mã lượt thi, thời lượng hoặc trạng thái tiếp tục; không chứa câu hỏi. `JOIN_EXAM` gửi mã lượt thi. `EXAM_STARTED` chứa câu hỏi, `durationSeconds` còn lại, `deadlineEpochMillis` và `savedAnswers`. Khi đăng nhập lại, Client thấy nút Tiếp tục bài thi nếu lượt thi còn hạn. Mỗi lần mở lại đề sau khi đợt cũ hoàn tất có mã lượt mới, nên sinh viên làm lại được. `HISTORY_RESULT` chứa các bài đã nộp của đúng sinh viên đang đăng nhập, kể cả các đợt trước. `SUBMIT_EXAM` sau hạn chỉ trả kết quả đã chấm từ bản nháp trên server.
+`EXAM_AVAILABLE` chứa thông tin đề, thời gian còn lại, `deadlineEpochMillis` và `serverTimeEpochMillis` tính từ lúc giảng viên mở đề. `JOIN_EXAM` gửi mã đợt; `EXAM_STARTED` trả câu hỏi, `durationSeconds` còn lại và `deadlineEpochMillis` chung kèm `serverTimeEpochMillis`. Không có `savedAnswers`. Vào lại trước hạn nhận bài trống, không được cộng giờ. Sau khi đã nộp hoặc hết hạn không được làm lại trong cùng đợt.
 
-Ví dụ tự lưu và nộp bài (mã câu hỏi là khóa của `answers`):
+`ANSWER_UPDATE` chứa toàn bộ lựa chọn hiện tại, gửi ngay sau thay đổi. Server lấy danh tính từ socket và chỉ giữ dữ liệu trong RAM để chấm hết giờ. Khi học viên tham gia lại, dữ liệu RAM của lượt cũ bị xóa. `SUBMIT_EXAM` trước hạn chấm nội dung gửi lên; sau hạn trả kết quả hoặc chấm lựa chọn Server đã nhận trước hạn. Tác vụ Server tự chấm cả học viên offline.
 
 ```json
-{"type":"SAVE_DRAFT","payload":{"examId":1,"answers":{"1":"B","2":"A"}}}
+{"type":"ANSWER_UPDATE","payload":{"examId":1,"answers":{"1":"B","2":"A"}}}
 {"type":"SUBMIT_EXAM","payload":{"examId":1,"answers":{"1":"B","2":"A"}}}
 ```
+
+`SAVE_DRAFT` là thông điệp của Client cũ, bị từ chối kèm yêu cầu cập nhật EXE. Dùng Client mới cùng Server mới.
 
 Thông điệp được gửi theo đúng thứ tự trên cùng một kết nối TCP. Server chỉ nhận đáp án của các câu thuộc đề và giới hạn mỗi đáp án 1000 ký tự.
 
@@ -97,6 +99,8 @@ Nhờ mapping này Server biết:
 - mã lượt và tên đề gắn với trạng thái đang làm/đã nộp;
 - cần gửi đề hoặc dữ liệu về kết nối nào.
 
-Mỗi kết nối đăng nhập mới bắt đầu ở `ONLINE`, dù sinh viên có bài nộp cũ. Bấm tham gia/tiếp tục chuyển sang
+Mỗi kết nối đăng nhập mới bắt đầu ở `ONLINE`, dù sinh viên có bài nộp cũ. Bấm tham gia/làm lại chuyển sang
 `DOING_EXAM`; nộp hoặc tự chấm hết giờ chuyển sang `SUBMITTED` cho đúng mã lượt đang làm.
 Khi có đợt mới để tham gia, trạng thái đã nộp của đợt trước trở về `ONLINE`. Cập nhật từ handler cũ không thay đổi phiên đăng nhập mới.
+
+Client tự đếm thời gian trên trang chờ, khóa tham gia khi hết hạn và nhận EXAM_AVAILABLE với exam=null khi Server thu hồi đề. Thời điểm nhận ANSWER_UPDATE/SUBMIT_EXAM do Server ghi sau khi đọc trọn thông điệp; không lấy giờ từ Client. Chấm hết giờ chờ xử lý xong các thông điệp nhận trước hạn rồi mới chốt kết quả.

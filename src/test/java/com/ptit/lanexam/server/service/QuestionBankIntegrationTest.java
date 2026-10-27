@@ -128,6 +128,12 @@ class QuestionBankIntegrationTest {
         exams.startAttempt("ST001", round.getId()).orElseThrow();
         var result = exams.submit("ST001", new SubmitExamRequest(round.getId(), Map.of(round.getQuestions().getFirst().getId(), "A")));
         assertEquals(10.0, result.getScore());
+        try (EntityManager em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            em.createQuery("update Exam e set e.deadlineAt = :past where e.id = :id")
+                    .setParameter("past", java.time.Instant.now().minusSeconds(1)).setParameter("id", round.getId()).executeUpdate();
+            em.getTransaction().commit();
+        }
         var reopened = exams.activateExam(created.id());
         assertNotEquals(round.getId(), reopened.getId());
         assertEquals("Câu hỏi ban đầu", reopened.getQuestions().getFirst().getContent());

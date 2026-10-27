@@ -5,6 +5,7 @@ import com.ptit.lanexam.common.*;
 import com.ptit.lanexam.common.dto.*;
 import com.ptit.lanexam.common.dto.AssignmentMessages.*;
 import com.ptit.lanexam.server.entity.Student;
+import com.ptit.lanexam.server.entity.Assignment;
 import com.ptit.lanexam.server.network.ExamServer;
 import com.ptit.lanexam.server.network.SessionRegistry;
 import jakarta.persistence.*;
@@ -190,6 +191,90 @@ class AssignmentServiceIntegrationTest {
 
     private Long createTask(Instant dueAt) {
         return service.create(new AssignmentDraft("Bài tập", "Nội dung bài tập", dueAt, null, null));
+    }
+
+    @Test
+    void timelyTcpSubmissionAndResubmissionSurviveQueueDelayButLateWorkIsRejected() throws Exception {
+        TestClock clock = new TestClock();
+        AssignmentService tasks = new AssignmentService(factory::createEntityManager, clock);
+        Instant deadline = NOW.plusSeconds(60);
+        Long id = tasks.create(new AssignmentDraft("Queue deadline", "Submit text", deadline, null, null));
+        ExamServer server = new ExamServer(new SessionRegistry(), new AuthService(factory::createEntityManager),
+                new ExamService(factory::createEntityManager, null, clock), tasks);
+        LanClient client = new LanClient();
+        BlockingQueue<NetworkMessage> messages = new LinkedBlockingQueue<>();
+        client.setMessageListener(messages::add);
+        var field = ExamServer.class.getDeclaredField("requestSlots");
+        field.setAccessible(true);
+        Semaphore slots = (Semaphore) field.get(server);
+        boolean held = false;
+        try {
+            server.start(0);
+            client.connect("127.0.0.1", server.getPort());
+            client.send(JsonUtil.message(MessageType.LOGIN, new LoginRequest("ST001", "2003-05-12")));
+            await(messages, MessageType.ASSIGNMENTS_RESULT);
+            for (int revision = 1; revision <= 2; revision++) {
+                slots.acquire(16); held = true;
+                Instant receivedAt = deadline.minusMillis(500 - revision);
+                clock.now = receivedAt;
+                client.send(JsonUtil.message(MessageType.ASSIGNMENT_SUBMIT,
+                        new SubmitRequest(id, "Revision " + revision, null, null, false)));
+                long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                while (!slots.hasQueuedThreads() && System.nanoTime() < end) Thread.sleep(10);
+                assertTrue(slots.hasQueuedThreads(), "The complete frame must reach the server before its deadline.");
+                clock.now = deadline.plusMillis(1);
+                slots.release(16); held = false;
+                var saved = JsonUtil.payload(await(messages, MessageType.ASSIGNMENT_SUBMITTED), AssignmentSubmissionInfo.class);
+                assertEquals("Revision " + revision, saved.content());
+                assertEquals(receivedAt, saved.submittedAt());
+                await(messages, MessageType.ASSIGNMENTS_RESULT);
+                assertEquals(1, tasks.listSubmissions(id).size());
+            }
+            // A new frame reaching the server exactly at the deadline is too late.
+            clock.now = deadline;
+            client.send(JsonUtil.message(MessageType.ASSIGNMENT_SUBMIT,
+                    new SubmitRequest(id, "Late overwrite", null, null, false)));
+            assertEquals("Bài tập đã hết hạn nộp.", await(messages, MessageType.ASSIGNMENT_ERROR).getPayload().asText());
+            assertEquals("Revision 2", tasks.listSubmissions(id).getFirst().content());
+        } finally {
+            if (held) slots.release(16);
+            client.close();
+            server.stop();
+        }
+    }
+
+    private static final class TestClock extends Clock {
+        volatile Instant now = NOW;
+        @Override public Instant instant() { return now; }
+        @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return this; }
+    }
+
+    @Test
+    void submissionWaitingForDatabaseLockKeepsItsOriginalReceiptTime() throws Exception {
+        Instant deadline = NOW.plusSeconds(60), receivedAt = deadline.minusMillis(1);
+        Long id = createTask(deadline);
+        TestClock clock = new TestClock();
+        clock.now = receivedAt;
+        CountDownLatch enteringDatabase = new CountDownLatch(1);
+        AssignmentService tasks = new AssignmentService(() -> {
+            enteringDatabase.countDown();
+            return factory.createEntityManager();
+        }, clock);
+        try (EntityManager lockOwner = factory.createEntityManager();
+             ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            lockOwner.getTransaction().begin();
+            lockOwner.find(Assignment.class, id, LockModeType.PESSIMISTIC_WRITE);
+            Future<AssignmentSubmissionInfo> submitting = workers.submit(() -> tasks.submit("ST001",
+                    new SubmitRequest(id, "Waited for row lock", null, null, false)));
+            try {
+                assertTrue(enteringDatabase.await(2, TimeUnit.SECONDS));
+                assertThrows(TimeoutException.class, () -> submitting.get(150, TimeUnit.MILLISECONDS));
+                clock.now = deadline.plusMillis(1);
+            } finally { lockOwner.getTransaction().rollback(); }
+            assertEquals(receivedAt, submitting.get(3, TimeUnit.SECONDS).submittedAt());
+            assertEquals("Waited for row lock", tasks.listSubmissions(id).getFirst().content());
+        }
     }
 
     private static NetworkMessage await(BlockingQueue<NetworkMessage> messages, MessageType type) throws Exception {

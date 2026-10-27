@@ -92,7 +92,7 @@ class TeacherAccountIntegrationTest {
         assertThrows(IllegalArgumentException.class, () -> exams(b).findOffer("ST001", roundA.getId()));
         exams(a).startAttempt("ST001", roundA.getId());
         assertThrows(IllegalStateException.class, () -> exams(b).submit("ST001", new SubmitExamRequest(roundA.getId(), Map.of())));
-        assertThrows(IllegalStateException.class, () -> exams(b).saveDraft("ST001", new SubmitExamRequest(roundA.getId(), Map.of())));
+        assertThrows(IllegalStateException.class, () -> exams(b).updateAnswers("ST001", new SubmitExamRequest(roundA.getId(), Map.of())));
         exams(a).submit("ST001", new SubmitExamRequest(roundA.getId(), Map.of(roundA.getQuestions().getFirst().getId(), "A")));
         assertEquals(1, exams(a).listResults().size());
         assertTrue(exams(b).listResults().isEmpty()); assertTrue(exams(b).listStudentHistory("ST001").isEmpty());
@@ -120,6 +120,8 @@ class TeacherAccountIntegrationTest {
         try (EntityManager em = factory.createEntityManager()) {
             em.getTransaction().begin();
             em.createQuery("update ExamAttempt a set a.deadlineAt = :past where a.submittedAt is null")
+                    .setParameter("past", Instant.now().minusSeconds(5)).executeUpdate();
+            em.createQuery("update Exam e set e.deadlineAt = :past where e.active = true")
                     .setParameter("past", Instant.now().minusSeconds(5)).executeUpdate();
             em.getTransaction().commit();
         }
@@ -156,6 +158,8 @@ class TeacherAccountIntegrationTest {
         student.close(); // An offline student still owns an open attempt.
         assertThrows(IllegalStateException.class, first::stopIfIdle);
         exams(a).submit("ST001", new SubmitExamRequest(roundA.getId(), Map.of()));
+        assertThrows(IllegalStateException.class, first::stopIfIdle);
+        expireRound(roundA.getId());
         Peer unauthenticated = connect(first);
         first.stopIfIdle(); assertFalse(first.isRunning());
         assertNotNull(unauthenticated.disconnected.poll(5, TimeUnit.SECONDS));
@@ -170,6 +174,8 @@ class TeacherAccountIntegrationTest {
         current.send(MessageType.JOIN_EXAM, new JoinExamRequest(roundB.getId())); current.await(MessageType.EXAM_STARTED);
         current.send(MessageType.SUBMIT_EXAM, new SubmitExamRequest(roundB.getId(), Map.of())); current.await(MessageType.SUBMIT_RESULT);
         assertEquals(1, exams(a).listResults().size()); assertEquals(1, exams(b).listResults().size());
+        assertThrows(IllegalStateException.class, second::stopIfIdle);
+        expireRound(roundB.getId());
         second.stopIfIdle();
     }
 
@@ -198,6 +204,14 @@ class TeacherAccountIntegrationTest {
     }
 
     private QuestionBankService bank(TeacherIdentity teacher) { return new QuestionBankService(factory::createEntityManager, teacher.id()); }
+    private void expireRound(Long id) {
+        try (EntityManager em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            em.createQuery("update Exam e set e.deadlineAt = :past where e.id = :id")
+                    .setParameter("past", Instant.now().minusSeconds(1)).setParameter("id", id).executeUpdate();
+            em.getTransaction().commit();
+        }
+    }
     private ExamService exams(TeacherIdentity teacher) { return new ExamService(factory::createEntityManager, teacher.id()); }
     private AssignmentService assignments(TeacherIdentity teacher) { return new AssignmentService(factory::createEntityManager, Clock.systemUTC(), teacher.id()); }
     private static BankQuestionDraft choice(Long subject) {

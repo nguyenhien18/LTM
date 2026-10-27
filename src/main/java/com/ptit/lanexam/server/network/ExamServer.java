@@ -14,9 +14,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -27,8 +26,12 @@ public class ExamServer {
     private final AuthService authService;
     private final ExamService examService;
     private final AssignmentService assignmentService;
-    private final ExecutorService clientPool = new ThreadPoolExecutor(
-            8, 64, 60, TimeUnit.SECONDS, new ArrayBlockingQueue<>(128));
+    // A handler lives as long as its socket. Start each one immediately instead of
+    // queueing it behind connections that may remain open for the whole exam.
+    private final ExecutorService clientPool = Executors.newVirtualThreadPerTaskExecutor();
+    // Reserve capacity in Hibernate's default 20-connection pool for expiry and
+    // teacher operations. Only requests wait for a slot, never idle connections.
+    private final Semaphore requestSlots = new Semaphore(16, true);
     private final ScheduledExecutorService expiryWorker = Executors.newSingleThreadScheduledExecutor();
     private final Set<ClientHandler> connections = ConcurrentHashMap.newKeySet();
     private final ReadWriteLock attemptGate = new ReentrantReadWriteLock(true);
@@ -37,6 +40,7 @@ public class ExamServer {
     private Thread acceptThread;
     private volatile boolean running;
     private volatile Long publishedExamId;
+    private volatile long publishedDeadline;
 
     public ExamServer(SessionRegistry registry, AuthService authService, ExamService examService) {
         this(registry, authService, examService, new AssignmentService());
@@ -61,6 +65,7 @@ public class ExamServer {
             try {
                 examService.finalizeExpiredAttempts();
                 for (ClientSession session : registry.allSessions()) session.getHandler().refreshExpiredAttempt();
+                clearExpiredOffer();
             }
             catch (Exception e) { System.err.println("Exam expiry error: " + e.getMessage()); }
         }, 1, 1, TimeUnit.SECONDS);
@@ -74,7 +79,7 @@ public class ExamServer {
                 socket.setSoTimeout(20000);
                 try {
                     ClientHandler handler = new ClientHandler(socket, registry, authService, examService, assignmentService,
-                            () -> publishedExamId, attemptGate, () -> running);
+                            () -> publishedExamId, attemptGate, () -> running, requestSlots);
                     connections.add(handler);
                     try {
                         clientPool.execute(() -> { try { handler.run(); } finally { connections.remove(handler); } });
@@ -89,7 +94,43 @@ public class ExamServer {
     }
 
     public int publishExam(ExamDto exam) {
-        publishedExamId = exam.getId();
+        attemptGate.writeLock().lock();
+        try {
+            if (!running) throw new IllegalStateException("Server đã dừng.");
+            publishedExamId = exam.getId();
+            publishedDeadline = exam.getDeadlineEpochMillis();
+        } finally { attemptGate.writeLock().unlock(); }
+        return notifyExamAvailability();
+    }
+
+    public record Publication(ExamDto exam, int notifiedStudents) {}
+
+    public Publication openExam(Long templateId) {
+        ExamDto exam;
+        attemptGate.writeLock().lock();
+        try {
+            if (!running) throw new IllegalStateException("Server đã dừng. Không thể mở đề.");
+            exam = examService.activateExam(templateId);
+            publishedExamId = exam.getId();
+            publishedDeadline = exam.getDeadlineEpochMillis();
+        } finally { attemptGate.writeLock().unlock(); }
+        return new Publication(exam, notifyExamAvailability());
+    }
+
+    private void clearExpiredOffer() {
+        boolean expired = false;
+        attemptGate.writeLock().lock();
+        try {
+            if (publishedExamId != null && publishedDeadline > 0
+                    && examService.currentTime().toEpochMilli() >= publishedDeadline) {
+                publishedExamId = null;
+                expired = true;
+            }
+        } finally { attemptGate.writeLock().unlock(); }
+        if (expired) notifyExamAvailability();
+    }
+
+    private int notifyExamAvailability() {
         int count = 0;
         for (ClientSession session : registry.allSessions()) {
             try {
@@ -113,8 +154,7 @@ public class ExamServer {
     public void stopIfIdle() {
         attemptGate.writeLock().lock();
         try {
-            if (examService.hasOpenAttempts())
-                throw new IllegalStateException("Còn sinh viên đang làm bài, kể cả sinh viên đã mất kết nối. Hãy chờ nộp hoặc hết giờ trước khi đổi giáo viên.");
+            examService.ensureCanStop();
             stop();
         } finally { attemptGate.writeLock().unlock(); }
     }

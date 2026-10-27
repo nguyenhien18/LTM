@@ -32,6 +32,7 @@ import javafx.scene.control.*;
 import javafx.scene.image.WritableImage;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import javafx.stage.WindowEvent;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
@@ -45,6 +46,7 @@ import java.util.Optional;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -290,7 +292,7 @@ class AssignmentPaneTest {
             @Override public List<ExamHistoryItem> listStudentHistory(String code) { return List.of(); }
             @Override public Optional<ExamOffer> findOffer(String code, Long id) { return Optional.of(new ExamOffer(101L, exam.getTitle(), 120, false)); }
             @Override public Optional<ExamDto> startAttempt(String code, Long id) { return Optional.of(exam); }
-            @Override public void saveDraft(String code, SubmitExamRequest request) {}
+            @Override public void updateAnswers(String code, SubmitExamRequest request, Instant receivedAt) {}
         };
         SessionRegistry registry = new SessionRegistry();
         ExamServer server = new ExamServer(registry, auth, exams, new AssignmentService() {
@@ -386,12 +388,13 @@ class AssignmentPaneTest {
             fx(() -> { ((Button) stage.getScene().lookup("#teacher-logout")).fire(); return null; });
             awaitFx(() -> notice("#server-error-notice") != null);
             fx(() -> {
-                assertTrue(notice("#server-error-notice").getContentText().contains("Còn sinh viên đang làm bài"));
+                assertTrue(notice("#server-error-notice").getContentText().contains("Ca thi đang diễn ra"));
                 assertNotNull(stage.getScene().lookup("#active-teacher"));
                 snapshot(notice("#server-error-notice"), "teacher-switch-blocked");
                 ((Button) notice("#server-error-notice").lookupButton(ButtonType.OK)).fire(); return null;
             });
             exams.submit("ST001", new SubmitExamRequest(round.getId(), Map.of()));
+            expireUiRound(factory);
             fx(() -> { ((Button) stage.getScene().lookup("#teacher-logout")).fire(); return null; });
             awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
             createTeacherInUi(stage, "gv02", "Trần Văn Minh");
@@ -415,6 +418,176 @@ class AssignmentPaneTest {
         }
     }
 
+    @Test
+    void closingServerWindowIsBlockedByOfflineAttemptAndAllowedAfterDeadline() throws Exception {
+        try (EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:close_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gvclose", "Giáo viên", "Matkhau123!");
+            ExamService exams = new ExamService(factory::createEntityManager, teacher.id());
+            try (var em = factory.createEntityManager()) {
+                em.getTransaction().begin();
+                em.persist(new Student("ST001", "Học sinh offline", LocalDate.of(2003, 5, 12)));
+                em.getTransaction().commit();
+            }
+            var template = exams.createExam(new ExamDraft("Đề đang thi", 20, List.of(new ExamDraft.QuestionDraft(
+                    "Chọn A", QuestionType.MULTIPLE_CHOICE, "Một", "Hai", "Ba", "Bốn", "A"))));
+            var round = exams.activateExam(template.id());
+            exams.startAttempt("ST001", round.getId());
+            ServerApp app = new ServerApp(factory::createEntityManager, () -> {});
+            Stage stage = fx(() -> { Stage created = new Stage(); app.start(created); return created; });
+            try {
+                awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+                loginTeacherInUi(stage, "gvclose");
+                fx(() -> { stage.fireEvent(new WindowEvent(stage, WindowEvent.WINDOW_CLOSE_REQUEST)); return null; });
+                awaitFx(() -> notice("#server-error-notice") != null);
+                fx(() -> {
+                    assertTrue(stage.isShowing());
+                    assertTrue(notice("#server-error-notice").getContentText().contains("Ca thi đang diễn ra"));
+                    ((Button) notice("#server-error-notice").lookupButton(ButtonType.OK)).fire();
+                    return null;
+                });
+                try (var em = factory.createEntityManager()) {
+                    em.getTransaction().begin();
+                    em.createQuery("update ExamAttempt a set a.deadlineAt = :past")
+                            .setParameter("past", Instant.now().minusSeconds(1)).executeUpdate();
+                    em.createQuery("update Exam e set e.deadlineAt = :past where e.active = true")
+                            .setParameter("past", Instant.now().minusSeconds(1)).executeUpdate();
+                    em.getTransaction().commit();
+                }
+                fx(() -> { stage.fireEvent(new WindowEvent(stage, WindowEvent.WINDOW_CLOSE_REQUEST)); return null; });
+                awaitFx(() -> !stage.isShowing());
+                assertTrue(exams.getExamResult("ST001", round.getId()).isPresent(), "Phải chấm bài hết giờ trước khi đóng.");
+            } finally {
+                fx(() -> {
+                    if (notice("#server-error-notice") != null)
+                        ((Button) notice("#server-error-notice").lookupButton(ButtonType.OK)).fire();
+                    app.stop(); stage.close(); return null;
+                });
+            }
+        }
+    }
+
+    @Test
+    void reconnectingSameOrDifferentStudentStartsEmptyAndExpiryGradesOnlineAndOfflineStudents() throws Exception {
+        try (EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:restart_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            try (var em = factory.createEntityManager()) {
+                em.getTransaction().begin();
+                em.persist(new Student("ST001", "Student A", LocalDate.of(2003, 5, 12)));
+                em.persist(new Student("ST002", "Student B", LocalDate.of(2003, 5, 12)));
+                em.getTransaction().commit();
+            }
+            BlockingQueue<String> updates = new LinkedBlockingQueue<>();
+            ExamService exams = new ExamService(factory::createEntityManager) {
+                @Override public void updateAnswers(String code, SubmitExamRequest request, Instant receivedAt) {
+                    super.updateAnswers(code, request, receivedAt);
+                    updates.add(code);
+                }
+            };
+            var template = exams.createExam(new ExamDraft("Đề chung", 20, List.of(new ExamDraft.QuestionDraft(
+                    "Chọn A", QuestionType.MULTIPLE_CHOICE, "Một", "Hai", "Ba", "Bốn", "A"))));
+            var round = exams.activateExam(template.id());
+            SessionRegistry registry = new SessionRegistry();
+            ExamServer server = new ExamServer(registry, new AuthService(factory::createEntityManager), exams,
+                    new AssignmentService(factory::createEntityManager));
+            server.start(0);
+            server.publishExam(round);
+            ClientApp app = new ClientApp();
+            Stage stage = fx(() -> { Stage created = new Stage(); app.start(created); return created; });
+            try {
+                for (String code : List.of("ST001", "ST001", "ST002")) {
+                    fx(() -> {
+                        ((TextField) stage.getScene().lookup("#login-code")).setText(code);
+                        ((TextField) stage.getScene().lookup("#login-port")).setText(Integer.toString(server.getPort()));
+                        ((Button) stage.getScene().lookup("#login-connect")).fire(); return null;
+                    });
+                    awaitFx(() -> stage.getScene().lookup("#join-exam") instanceof Button join && !join.isDisabled());
+                    fx(() -> { ((Button) stage.getScene().lookup("#join-exam")).fire(); return null; });
+                    awaitFx(() -> stage.getScene().lookup("#exam-submit") != null);
+                    fx(() -> {
+                        var choices = stage.getScene().getRoot().lookupAll(".radio-button");
+                        assertTrue(choices.stream().noneMatch(node -> ((RadioButton) node).isSelected()), "Vào lại phải làm bài trống: " + code);
+                        choices.stream().map(node -> (RadioButton) node).filter(button -> button.getText().startsWith("A."))
+                                .findFirst().orElseThrow().fire();
+                        return null;
+                    });
+                    assertEquals(code, updates.poll(5, TimeUnit.SECONDS));
+                    if (code.equals("ST002")) break;
+                    registry.find(code).getHandler().closeQuietly();
+                    awaitFx(() -> notice(".dialog-pane") != null);
+                    fx(() -> { ((Button) notice(".dialog-pane").lookupButton(ButtonType.OK)).fire(); return null; });
+                    awaitFx(() -> stage.getScene().lookup("#login-connect") != null);
+                }
+                try (var em = factory.createEntityManager()) {
+                    em.getTransaction().begin();
+                    em.createQuery("update ExamAttempt a set a.deadlineAt = :past")
+                            .setParameter("past", Instant.now().minusSeconds(1)).executeUpdate();
+                    em.getTransaction().commit();
+                }
+                awaitFx(() -> stage.getScene().getRoot().lookupAll(".label").stream()
+                        .anyMatch(node -> node instanceof Label label && label.getText().startsWith("Điểm:")));
+                assertEquals(10.0, exams.getExamResult("ST001", round.getId()).orElseThrow().getScore());
+                assertEquals(10.0, exams.getExamResult("ST002", round.getId()).orElseThrow().getScore());
+            } finally {
+                fx(() -> { app.stop(); stage.close(); return null; });
+                server.stop();
+            }
+        }
+    }
+
+    @Test
+    void waitingDashboardCountsDownAndDisablesJoiningWhenRoundExpires() throws Exception {
+        long deadline = System.currentTimeMillis() + 4000;
+        AtomicInteger joins = new AtomicInteger();
+        ExamDto round = new ExamDto(99L, "Đề sắp hết giờ", 4, List.of());
+        round.setDeadlineEpochMillis(deadline);
+        ExamService exams = new ExamService() {
+            @Override public void finalizeExpiredAttempts() {}
+            @Override public List<ExamHistoryItem> listStudentHistory(String code) { return List.of(); }
+            @Override public Optional<ExamOffer> findOffer(String code, Long id) {
+                long now = System.currentTimeMillis();
+                return now >= deadline ? Optional.empty() : Optional.of(new ExamOffer(99L, round.getTitle(),
+                        (int) ((deadline - now + 999) / 1000), false, null, deadline, now));
+            }
+            @Override public Optional<ExamDto> startAttempt(String code, Long id) { joins.incrementAndGet(); return Optional.of(round); }
+        };
+        AuthService auth = new AuthService() {
+            @Override public Optional<Student> authenticate(String code, String birthDate) {
+                return Optional.of(new Student("ST001", "Student", LocalDate.of(2003, 5, 12)));
+            }
+            @Override public boolean isAccountLocked(String code) { return false; }
+        };
+        ExamServer server = new ExamServer(new SessionRegistry(), auth, exams, new AssignmentService() {
+            @Override public List<AssignmentInfo> listForStudent(String code) { return List.of(); }
+        });
+        server.start(0); server.publishExam(round);
+        ClientApp app = new ClientApp();
+        Stage stage = fx(() -> {
+            Stage created = new Stage(); app.start(created);
+            ((TextField) created.getScene().lookup("#login-code")).setText("ST001");
+            ((TextField) created.getScene().lookup("#login-port")).setText(Integer.toString(server.getPort()));
+            ((Button) created.getScene().lookup("#login-connect")).fire();
+            return created;
+        });
+        try {
+            awaitFx(() -> stage.getScene().lookup("#join-exam") instanceof Button join && !join.isDisabled());
+            String initial = fx(() -> ((Label) stage.getScene().lookup("#exam-offer-label")).getText());
+            awaitFx(() -> !initial.equals(((Label) stage.getScene().lookup("#exam-offer-label")).getText()));
+            awaitFx(() -> ((Button) stage.getScene().lookup("#join-exam")).isDisabled());
+            fx(() -> { ((Button) stage.getScene().lookup("#join-exam")).fire(); return null; });
+            assertEquals(0, joins.get(), "Đề hết hạn không được gửi yêu cầu tham gia.");
+        } finally {
+            fx(() -> { app.stop(); stage.close(); return null; });
+            server.stop();
+        }
+    }
+
     private static void createTeacherInUi(Stage stage, String username, String fullName) throws Exception {
         fx(() -> {
             Platform.runLater(() -> ((Button) stage.getScene().lookup("#teacher-login-create")).fire()); return null;
@@ -432,6 +605,15 @@ class AssignmentPaneTest {
             ((Button) pane.lookup("#teacher-register-save")).fire(); return null;
         });
         awaitFx(() -> ((Label) stage.getScene().lookup("#teacher-login-message")).getText().contains("Đã tạo tài khoản"));
+    }
+
+    private static void expireUiRound(EntityManagerFactory factory) {
+        try (var em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            em.createQuery("update Exam e set e.deadlineAt = :past where e.active = true")
+                    .setParameter("past", Instant.now().minusSeconds(1)).executeUpdate();
+            em.getTransaction().commit();
+        }
     }
 
     private static void loginTeacherInUi(Stage stage, String username) throws Exception {

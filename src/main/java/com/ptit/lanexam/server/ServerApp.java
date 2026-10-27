@@ -64,6 +64,7 @@ public class ServerApp extends Application {
     private Button questionBankButton;
     private Button lockedAccountsButton;
     private Stage mainStage;
+    private boolean closePending;
 
     public ServerApp() {
         this(JpaUtil::em, () -> { JpaUtil.init(); SeedData.ensureSeeded(); }, true);
@@ -79,6 +80,11 @@ public class ServerApp extends Application {
     @Override
     public void start(Stage stage) {
         mainStage = stage;
+        stage.setOnCloseRequest(event -> {
+            if (examService == null) return;
+            event.consume();
+            closeServerWindow();
+        });
         registry.setListener(snapshot -> {
             long version = workspaceVersion;
             Platform.runLater(() -> { if (version == workspaceVersion) rows.setAll(snapshot); });
@@ -272,9 +278,9 @@ public class ServerApp extends Application {
         ExamService currentExams = examService;
         Thread thread = new Thread(() -> {
             try {
-                ExamDto exam = currentExams.activateExam(examId);
-                if (!activeServer.isRunning()) return;
-                int count = activeServer.publishExam(exam);
+                ExamServer.Publication publication = activeServer.openExam(examId);
+                ExamDto exam = publication.exam();
+                int count = publication.notifiedStudents();
                 Platform.runLater(() -> {
                     if (version != workspaceVersion) return;
                     statusLabel.setText("Đã mở đợt #" + exam.getId() + ": " + exam.getTitle()
@@ -409,7 +415,7 @@ public class ServerApp extends Application {
         dialog.setTitle(lock ? "Khóa tài khoản" : "Cảnh báo vi phạm");
         dialog.setHeaderText((lock ? "Khóa " : "Cảnh báo ") + student.studentCode() + " — " + student.fullName());
         dialog.setContentText(lock ? "Lý do khóa (tối đa 500 ký tự):" : "Nội dung gửi đến Client (tối đa 1.000 ký tự):");
-        if (lock) dialog.getEditor().setTooltip(new Tooltip("Ngắt kết nối và chặn đăng nhập cho đến khi giảng viên mở khóa. Bản nháp đã lưu vẫn được giữ."));
+        if (lock) dialog.getEditor().setTooltip(new Tooltip("Ngắt kết nối và chặn đăng nhập đến khi mở khóa. Hết giờ chấm các lựa chọn Server đã nhận; vào lại làm bài trống."));
         ((Button) dialog.getDialogPane().lookupButton(ButtonType.OK)).setText(lock ? "Khóa tài khoản" : "Gửi cảnh báo");
         dialog.showAndWait().ifPresent(reason -> {
             studentTable.setDisable(true);
@@ -435,6 +441,27 @@ public class ServerApp extends Application {
         changeSession(false);
     }
 
+    private void closeServerWindow() {
+        if (closePending) return;
+        closePending = true;
+        javafx.scene.Parent workspace = mainStage.getScene().getRoot();
+        workspace.setDisable(true);
+        ExamServer currentServer = server;
+        ExamService currentExams = examService;
+        AssignmentUi.async("server-window-close", () -> {
+            if (currentServer != null && currentServer.isRunning()) currentServer.stopIfIdle();
+            else currentExams.ensureCanStop();
+            return true;
+        }, done -> {
+            stop();
+            mainStage.close();
+        }, ex -> {
+            closePending = false;
+            workspace.setDisable(false);
+            showError("Chưa thể đóng Server", ex.getMessage());
+        });
+    }
+
     private void logoutTeacher() { changeSession(true); }
 
     private void changeSession(boolean logout) {
@@ -446,7 +473,7 @@ public class ServerApp extends Application {
         logoutButton.setDisable(true); stopButton.setDisable(true); startButton.setDisable(true);
         AssignmentUi.async("teacher-session-change", () -> {
             if (currentServer != null && currentServer.isRunning()) currentServer.stopIfIdle();
-            else if (currentExams.hasOpenAttempts()) throw new IllegalStateException("Còn sinh viên đang làm bài, kể cả sinh viên đã mất kết nối. Hãy chờ nộp hoặc hết giờ trước khi đổi giáo viên.");
+            else currentExams.ensureCanStop();
             return true;
         }, done -> {
             if (version != workspaceVersion) return;

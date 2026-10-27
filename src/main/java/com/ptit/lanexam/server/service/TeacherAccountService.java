@@ -48,6 +48,11 @@ public class TeacherAccountService {
                     .setParameter("login", normalize(username)).getResultStream().findFirst();
             if (found.isEmpty() || !TeacherPassword.matches(password, found.get().getPasswordHash())) return Optional.empty();
             Teacher teacher = found.get();
+            List<Long> runningOwners = em.createQuery("select distinct e.ownerTeacherId from Exam e "
+                            + "where e.active = true and e.deadlineAt > :now", Long.class)
+                    .setParameter("now", Instant.now()).getResultList();
+            if (runningOwners.stream().anyMatch(owner -> !Objects.equals(owner, teacher.getId())))
+                throw new IllegalStateException("Ca thi của giáo viên khác đang diễn ra. Hãy chờ hết giờ và chấm xong trước khi đổi giáo viên.");
             List<Long> activeOwners = em.createQuery("select distinct a.exam.ownerTeacherId from ExamAttempt a "
                             + "where a.submittedAt is null and a.deadlineAt > :now", Long.class)
                     .setParameter("now", Instant.now()).getResultList();

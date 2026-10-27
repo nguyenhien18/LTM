@@ -13,11 +13,17 @@ import com.ptit.lanexam.server.service.ExamService;
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ClientHandler implements Runnable {
     private final Socket socket;
@@ -28,11 +34,18 @@ public class ClientHandler implements Runnable {
     private final Supplier<Long> publishedExamId;
     private final ReadWriteLock attemptGate;
     private final BooleanSupplier acceptsAttempts;
+    private final Semaphore requestSlots;
 
     private BufferedReader reader;
-    private BufferedWriter writer;
+    private volatile ClientWriter writer;
     private volatile boolean closed;
+    private volatile boolean closing;
     private volatile String studentCode;
+    private record Incoming(NetworkMessage message, ExamService.RequestReceipt receipt, int characters) {}
+    private final BlockingQueue<Incoming> incoming = new ArrayBlockingQueue<>(64);
+    private final AtomicLong incomingCharacters = new AtomicLong();
+    private volatile boolean inputFinished;
+    private volatile Thread processor;
 
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
                          Supplier<Long> publishedExamId) {
@@ -47,6 +60,13 @@ public class ClientHandler implements Runnable {
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
                          AssignmentService assignmentService, Supplier<Long> publishedExamId,
                          ReadWriteLock attemptGate, BooleanSupplier acceptsAttempts) {
+        this(socket, registry, authService, examService, assignmentService, publishedExamId,
+                attemptGate, acceptsAttempts, new Semaphore(1));
+    }
+
+    public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
+                         AssignmentService assignmentService, Supplier<Long> publishedExamId,
+                         ReadWriteLock attemptGate, BooleanSupplier acceptsAttempts, Semaphore requestSlots) {
         this.socket = socket;
         this.registry = registry;
         this.authService = authService;
@@ -55,26 +75,77 @@ public class ClientHandler implements Runnable {
         this.publishedExamId = publishedExamId;
         this.attemptGate = attemptGate;
         this.acceptsAttempts = acceptsAttempts;
+        this.requestSlots = requestSlots;
     }
 
     @Override
     public void run() {
         try {
             reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+            writer = new ClientWriter(socket.getOutputStream(), this::closeTransport);
+            processor = Thread.ofVirtual().name("lan-exam-client-requests").start(this::processRequests);
 
             String line;
             while (!closed && (line = TransferLimits.readLine(reader)) != null) {
-                handle(JsonUtil.fromJson(line));
+                ExamService.RequestReceipt receipt = examService.receiveRequest();
+                boolean queued = false;
+                try {
+                    NetworkMessage message = JsonUtil.fromJson(line);
+                    if (message.getType() == MessageType.ANSWER_UPDATE || message.getType() == MessageType.SUBMIT_EXAM) {
+                        SubmitExamRequest answers = JsonUtil.payload(message, SubmitExamRequest.class);
+                        receipt.bind(studentCode, answers == null ? null : answers.getExamId());
+                    } else receipt.close();
+                    if (incomingCharacters.addAndGet(line.length()) > 2L * TransferLimits.MAX_MESSAGE_CHARS
+                            || !incoming.offer(new Incoming(message, receipt, line.length())))
+                        throw new IOException("Quá nhiều yêu cầu đang chờ xử lý.");
+                    queued = true;
+                } finally { if (!queued) receipt.close(); }
             }
         } catch (Exception e) {
             if (!closed) System.err.println("Client " + socket.getRemoteSocketAddress() + " disconnected: " + e.getMessage());
         } finally {
+            inputFinished = true;
+            // An EOF must not discard complete answers already received. Drain
+            // the bounded queue before removing the student's connection.
+            Thread worker = processor;
+            if (worker != null) {
+                try { worker.join(); }
+                catch (InterruptedException ex) { Thread.currentThread().interrupt(); closeQuietly(); }
+            }
+            Incoming abandoned;
+            while ((abandoned = incoming.poll()) != null) abandoned.receipt().close();
             cleanup();
         }
     }
 
-    private synchronized void handle(NetworkMessage message) {
+    private void processRequests() {
+        try {
+            while (!closed && (!inputFinished || !incoming.isEmpty())) {
+                Incoming request = incoming.poll(100, TimeUnit.MILLISECONDS);
+                if (request == null) continue;
+                incomingCharacters.addAndGet(-request.characters());
+                try (ExamService.RequestReceipt receipt = request.receipt()) {
+                    requestSlots.acquire();
+                    try {
+                        if (!closed && !closing) {
+                            if (request.message().getType() == MessageType.ANSWER_UPDATE
+                                    || request.message().getType() == MessageType.SUBMIT_EXAM) {
+                                SubmitExamRequest answers = JsonUtil.payload(request.message(), SubmitExamRequest.class);
+                                receipt.bind(studentCode, answers == null ? null : answers.getExamId());
+                            }
+                            handle(request.message(), receipt.receivedAt());
+                        }
+                    } finally { requestSlots.release(); }
+                }
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ex) {
+            closeQuietly();
+        }
+    }
+
+    private synchronized void handle(NetworkMessage message, Instant receivedAt) {
         try {
             switch (message.getType()) {
                 case LOGIN -> handleLogin(JsonUtil.payload(message, LoginRequest.class));
@@ -83,13 +154,14 @@ public class ClientHandler implements Runnable {
                     sendHistory();
                     sendAvailability();
                 });
-                case SUBMIT_EXAM -> requireLogin(() -> handleSubmit(JsonUtil.payload(message, SubmitExamRequest.class)));
-                case SAVE_DRAFT -> requireLogin(() -> examService.saveDraft(studentCode,
-                        JsonUtil.payload(message, SubmitExamRequest.class)));
+                case SUBMIT_EXAM -> requireLogin(() -> handleSubmit(JsonUtil.payload(message, SubmitExamRequest.class), receivedAt));
+                case SAVE_DRAFT -> sendError("Client cũ không còn được hỗ trợ. Hãy dùng LANExamClient.exe phiên bản mới.");
+                case ANSWER_UPDATE -> requireLogin(() -> examService.updateAnswers(studentCode,
+                        JsonUtil.payload(message, SubmitExamRequest.class), receivedAt));
                 case ASSIGNMENTS_REQUEST -> requireLogin(this::sendAssignments);
                 case ASSIGNMENT_SUBMIT -> requireLogin(() -> {
                     var result = assignmentService.submit(studentCode,
-                            JsonUtil.payload(message, AssignmentMessages.SubmitRequest.class));
+                            JsonUtil.payload(message, AssignmentMessages.SubmitRequest.class), receivedAt);
                     send(JsonUtil.message(MessageType.ASSIGNMENT_SUBMITTED, result));
                     sendAssignments();
                 });
@@ -183,12 +255,12 @@ public class ClientHandler implements Runnable {
         return offer.isPresent();
     }
 
-    private void handleSubmit(SubmitExamRequest request) {
+    private void handleSubmit(SubmitExamRequest request, Instant receivedAt) {
         ClientSession current = registry.find(studentCode);
         if (current != null && current.getStatus() == ClientStatus.DOING_EXAM
                 && (request == null || !java.util.Objects.equals(current.getExamId(), request.getExamId())))
             throw new IllegalArgumentException("Yêu cầu nộp bài không thuộc đề đang làm trong phiên này.");
-        SubmitResult result = examService.submit(studentCode, request);
+        SubmitResult result = examService.submit(studentCode, request, receivedAt);
         registry.updateExam(studentCode, this, session -> session.completeExam(request.getExamId()));
         send(JsonUtil.message(MessageType.SUBMIT_RESULT, result));
         sendHistory();
@@ -207,15 +279,9 @@ public class ClientHandler implements Runnable {
         action.run();
     }
 
-    public synchronized void send(NetworkMessage message) {
+    public void send(NetworkMessage message) {
         if (closed || writer == null) return;
-        try {
-            writer.write(JsonUtil.toJson(message));
-            writer.newLine();
-            writer.flush();
-        } catch (IOException e) {
-            closeQuietly();
-        }
+        writer.send(message, false);
     }
 
     public synchronized void sendExam(ExamDto exam) {
@@ -230,14 +296,13 @@ public class ClientHandler implements Runnable {
 
     public synchronized boolean warnViolation(String reason) {
         if (closed || studentCode == null || !registry.isCurrent(studentCode, this)) return false;
-        send(JsonUtil.message(MessageType.VIOLATION_WARNING, reason));
-        return !closed;
+        return writer != null && writer.send(JsonUtil.message(MessageType.VIOLATION_WARNING, reason), false);
     }
 
     public synchronized void disconnectLocked(String reason) {
-        send(JsonUtil.message(MessageType.ACCOUNT_LOCKED, reason));
-        closeQuietly();
+        closing = true;
         if (studentCode != null) registry.remove(studentCode, this);
+        if (writer == null || !writer.send(JsonUtil.message(MessageType.ACCOUNT_LOCKED, reason), true)) closeQuietly();
     }
 
     public synchronized void refreshExpiredAttempt() {
@@ -260,6 +325,14 @@ public class ClientHandler implements Runnable {
 
     public void closeQuietly() {
         closed = true;
+        closeTransport();
+        Thread worker = processor;
+        if (worker != null) worker.interrupt();
+    }
+
+    private void closeTransport() {
         try { socket.close(); } catch (IOException ignored) {}
+        ClientWriter currentWriter = writer;
+        if (currentWriter != null) currentWriter.close();
     }
 }

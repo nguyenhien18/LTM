@@ -6,7 +6,6 @@ import com.ptit.lanexam.common.MessageType;
 import com.ptit.lanexam.common.NetworkMessage;
 import com.ptit.lanexam.common.dto.*;
 import javafx.animation.KeyFrame;
-import javafx.animation.PauseTransition;
 import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -40,16 +39,15 @@ public class ClientApp extends Application {
         thread.setDaemon(true);
         return thread;
     });
-    private final Map<Long, String> localAnswers = new LinkedHashMap<>();
 
     private Stage stage;
     private Label connectionLabel;
     private Timeline timer;
-    private PauseTransition draftDebounce;
+    private Timeline dashboardTimer;
+    private long offerDeadlineNanos;
     private ScheduledExecutorService heartbeat;
     private int remainingSeconds;
     private long deadlineNanos;
-    private Long localExamId;
     private volatile int connectionVersion;
     private ExamDto currentExam;
     private Button submitButton;
@@ -77,14 +75,10 @@ public class ClientApp extends Application {
             Platform.runLater(() -> {
                 if (version != connectionVersion) return;
                 connectionVersion++;
-                if (currentExam != null) {
-                    localExamId = currentExam.getId();
-                    localAnswers.clear();
-                    localAnswers.putAll(snapshotAnswers());
-                }
+                answerSuppliers.clear();
                 currentExam = null;
                 if (timer != null) timer.stop();
-                if (draftDebounce != null) draftDebounce.stop();
+                if (dashboardTimer != null) dashboardTimer.stop();
                 stopHeartbeat();
                 showAlert(Alert.AlertType.WARNING, "Mất kết nối", "Đã mất kết nối với Server: " + message);
                 showLoginScene();
@@ -190,6 +184,8 @@ public class ClientApp extends Application {
                     case LOGIN_RESULT -> handleLoginResult(JsonUtil.payload(message, LoginResponse.class));
                     case EXAM_AVAILABLE -> {
                         availableExam = JsonUtil.payload(message, ExamAvailability.class).exam();
+                        if (availableExam != null) offerDeadlineNanos = localDeadline(availableExam.durationSeconds(),
+                                availableExam.deadlineEpochMillis(), availableExam.serverTimeEpochMillis());
                         if (availableExam == null) joinPending = false;
                         refreshDashboard();
                     }
@@ -223,6 +219,10 @@ public class ClientApp extends Application {
                         showModerationNotice(message.getPayload().asText(), true);
                     }
                     case ERROR -> {
+                        if (currentExam != null && submitButton != null) {
+                            submitButton.setDisable(false);
+                            submitButton.setText("NỘP BÀI");
+                        }
                         joinPending = false;
                         refreshDashboard();
                         showAlert(Alert.AlertType.ERROR, "Server báo lỗi", message.getPayload().asText());
@@ -254,6 +254,11 @@ public class ClientApp extends Application {
 
     private void showDashboard() {
         dashboardVisible = true;
+        if (dashboardTimer == null) {
+            dashboardTimer = new Timeline(new KeyFrame(Duration.millis(250), event -> refreshOffer()));
+            dashboardTimer.setCycleCount(Timeline.INDEFINITE);
+        }
+        dashboardTimer.play();
         if (dashboardScene != null) {
             stage.setScene(dashboardScene);
             refreshDashboard();
@@ -264,6 +269,7 @@ public class ClientApp extends Application {
         Label subtitle = new Label("Tham gia bài thi và nộp bài tập do giảng viên giao");
 
         availableLabel = new Label();
+        availableLabel.setId("exam-offer-label");
         availableLabel.setWrapText(true);
         joinButton = new Button("Tham gia bài thi");
         joinButton.setId("join-exam");
@@ -322,16 +328,22 @@ public class ClientApp extends Application {
     private void refreshDashboard() {
         if (!dashboardVisible) return;
         historyTable.getItems().setAll(history);
+        refreshOffer();
+    }
+
+    private void refreshOffer() {
+        if (!dashboardVisible || joinButton == null) return;
         if (availableExam == null) {
             availableLabel.setText("Chưa có bài thi nào đang mở cho bạn. Hãy chờ giảng viên mở bài.");
             joinButton.setDisable(true);
         } else {
+            int seconds = remaining(offerDeadlineNanos);
             availableLabel.setText("Đợt #" + availableExam.examId() + " — "
                     + (availableExam.subjectName() == null ? "" : availableExam.subjectName() + " — ") + availableExam.title() + " — "
-                    + (availableExam.resumable() ? "Tiếp tục bài đang làm" : "Thời gian: "
-                    + (availableExam.durationSeconds() / 60) + " phút"));
-            joinButton.setText(availableExam.resumable() ? "Tiếp tục bài thi" : "Tham gia bài thi");
-            joinButton.setDisable(joinPending);
+                    + (seconds == 0 ? "Đã hết giờ." : "Còn " + (seconds / 60) + " phút " + (seconds % 60)
+                    + " giây; vào lại sẽ làm bài trống."));
+            joinButton.setText(seconds == 0 ? "Đã hết giờ" : availableExam.resumable() ? "Làm lại từ đầu" : "Tham gia bài thi");
+            joinButton.setDisable(joinPending || seconds == 0);
         }
     }
 
@@ -360,6 +372,7 @@ public class ClientApp extends Application {
 
     private void joinAvailableExam() {
         if (availableExam == null) return;
+        if (remaining(offerDeadlineNanos) == 0) { refreshOffer(); return; }
         Long examId = availableExam.examId();
         joinPending = true;
         joinButton.setDisable(true);
@@ -380,22 +393,13 @@ public class ClientApp extends Application {
 
     private void showExam(ExamDto exam) {
         dashboardVisible = false;
+        if (dashboardTimer != null) dashboardTimer.stop();
         availableExam = null;
         joinPending = false;
-        Map<Long, String> currentValues = currentExam != null && exam.getId().equals(currentExam.getId())
-                ? snapshotAnswers() : Map.of();
         this.currentExam = exam;
-        this.deadlineNanos = System.nanoTime() + Math.max(0, exam.getDurationSeconds()) * 1_000_000_000L;
-        this.remainingSeconds = exam.getDurationSeconds();
+        this.deadlineNanos = localDeadline(exam.getDurationSeconds(), exam.getDeadlineEpochMillis(), exam.getServerTimeEpochMillis());
+        this.remainingSeconds = remaining(deadlineNanos);
         answerSuppliers.clear();
-        Map<Long, String> restored = new LinkedHashMap<>(exam.getSavedAnswers());
-        restored.putAll(currentValues);
-        if (exam.getId().equals(localExamId)) restored.putAll(localAnswers);
-        localAnswers.clear();
-        localExamId = null;
-        if (draftDebounce != null) draftDebounce.stop();
-        draftDebounce = new PauseTransition(Duration.millis(600));
-        draftDebounce.setOnFinished(e -> saveDraft());
 
         Label title = new Label((exam.getSubjectName() == null ? "" : exam.getSubjectName() + " — ") + exam.getTitle());
         title.setWrapText(true);
@@ -422,15 +426,13 @@ public class ClientApp extends Application {
 
             if ("MULTIPLE_CHOICE".equals(q.getType())) {
                 ToggleGroup group = new ToggleGroup();
-                String savedAnswer = restored.get(q.getId());
                 for (String option : q.getOptions()) {
                     RadioButton rb = new RadioButton(option);
                     rb.setToggleGroup(group);
                     rb.setWrapText(true);
-                    if (savedAnswer != null && option.startsWith(savedAnswer + ".")) rb.setSelected(true);
                     card.getChildren().add(rb);
                 }
-                group.selectedToggleProperty().addListener((obs, old, selected) -> draftDebounce.playFromStart());
+                group.selectedToggleProperty().addListener((obs, old, selected) -> updateAnswers());
                 answerSuppliers.put(q.getId(), () -> {
                     Toggle selected = group.getSelectedToggle();
                     if (selected == null) return "";
@@ -439,10 +441,9 @@ public class ClientApp extends Application {
                 });
             } else {
                 TextField answer = new TextField();
-                answer.setText(restored.getOrDefault(q.getId(), ""));
-                answer.textProperty().addListener((obs, old, value) -> draftDebounce.playFromStart());
                 answer.setPromptText("Nhập đáp án");
                 card.getChildren().add(answer);
+                answer.textProperty().addListener((obs, old, value) -> updateAnswers());
                 answerSuppliers.put(q.getId(), () -> answer.getText().trim());
             }
             questionBox.getChildren().add(card);
@@ -470,7 +471,7 @@ public class ClientApp extends Application {
 
         if (timer != null) timer.stop();
         timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> {
-            remainingSeconds = (int) Math.max(0, Math.ceil((deadlineNanos - System.nanoTime()) / 1_000_000_000.0));
+            remainingSeconds = remaining(deadlineNanos);
             updateTimerLabel(timerLabel);
             if (remainingSeconds <= 0) {
                 timer.stop();
@@ -479,16 +480,12 @@ public class ClientApp extends Application {
         }));
         timer.setCycleCount(Timeline.INDEFINITE);
         timer.play();
-        if (!restored.equals(exam.getSavedAnswers())) draftDebounce.playFromStart();
     }
 
     private void submitCurrentExam(boolean automatic) {
         if (currentExam == null || submitButton == null || submitButton.isDisabled()) return;
         submitButton.setDisable(true);
         submitButton.setText("Đang nộp...");
-        if (timer != null) timer.stop();
-        if (draftDebounce != null) draftDebounce.stop();
-
         SubmitExamRequest request = new SubmitExamRequest(currentExam.getId(), snapshotAnswers());
         int version = connectionVersion;
         outbound.execute(() -> {
@@ -505,7 +502,7 @@ public class ClientApp extends Application {
             }
         });
 
-        // The server decides whether a late request uses the last saved draft.
+        // The server grades the current session at the common deadline.
     }
 
     private Map<Long, String> snapshotAnswers() {
@@ -514,13 +511,13 @@ public class ClientApp extends Application {
         return answers;
     }
 
-    private void saveDraft() {
-        if (currentExam == null || submitButton == null || submitButton.isDisabled()) return;
-        SubmitExamRequest draft = new SubmitExamRequest(currentExam.getId(), snapshotAnswers());
+    private void updateAnswers() {
+        if (currentExam == null) return;
+        SubmitExamRequest answers = new SubmitExamRequest(currentExam.getId(), snapshotAnswers());
         int version = connectionVersion;
         outbound.execute(() -> {
             if (version == connectionVersion) {
-                try { client.send(JsonUtil.message(MessageType.SAVE_DRAFT, draft)); }
+                try { client.send(JsonUtil.message(MessageType.ANSWER_UPDATE, answers)); }
                 catch (Exception ignored) { /* The disconnect listener handles a lost connection. */ }
             }
         });
@@ -528,11 +525,9 @@ public class ClientApp extends Application {
 
     private void showResult(SubmitResult result) {
         dashboardVisible = false;
+        if (dashboardTimer != null) dashboardTimer.stop();
         if (timer != null) timer.stop();
-        if (draftDebounce != null) draftDebounce.stop();
         currentExam = null;
-        localAnswers.clear();
-        localExamId = null;
         Label title = new Label("Đã nộp bài");
         title.setStyle("-fx-font-size: 24px; -fx-font-weight: bold;");
         Label score = new Label(String.format("Điểm: %.2f / 10", result.getScore()));
@@ -557,7 +552,7 @@ public class ClientApp extends Application {
         connectionVersion++;
         for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
-        if (draftDebounce != null) draftDebounce.stop();
+        if (dashboardTimer != null) dashboardTimer.stop();
         stopHeartbeat();
         currentExam = null;
         submitButton = null;
@@ -567,8 +562,6 @@ public class ClientApp extends Application {
         joinPending = false;
         dashboardVisible = false;
         answerSuppliers.clear();
-        localAnswers.clear();
-        localExamId = null;
         client.close();
         showLoginScene();
     }
@@ -578,6 +571,16 @@ public class ClientApp extends Application {
         int minutes = safe / 60;
         int seconds = safe % 60;
         label.setText(String.format("Còn lại: %02d:%02d", minutes, seconds));
+    }
+
+    private static long localDeadline(int seconds, long deadlineMillis, long serverMillis) {
+        long remainingMillis = deadlineMillis > 0 && serverMillis > 0
+                ? Math.max(0, deadlineMillis - serverMillis) : Math.max(0L, seconds) * 1000;
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(remainingMillis);
+    }
+
+    private static int remaining(long deadline) {
+        return (int) Math.max(0, Math.ceil((deadline - System.nanoTime()) / 1_000_000_000.0));
     }
 
     private void startHeartbeat() {
@@ -623,6 +626,7 @@ public class ClientApp extends Application {
     public void stop() {
         for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
+        if (dashboardTimer != null) dashboardTimer.stop();
         if (assignmentPane != null) assignmentPane.dispose();
         stopHeartbeat();
         client.close();

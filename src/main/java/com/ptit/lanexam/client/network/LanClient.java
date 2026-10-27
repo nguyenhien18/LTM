@@ -58,7 +58,7 @@ public class LanClient {
                 NetworkMessage message = JsonUtil.fromJson(line);
                 messageListener.accept(message);
                 if (message.getType() == MessageType.ACCOUNT_LOCKED) {
-                    if (isCurrent(connected)) close();
+                    closeIfCurrent(connected);
                     return; // The explicit lock notification replaces a generic disconnect popup.
                 }
             }
@@ -66,7 +66,7 @@ public class LanClient {
         } catch (Exception e) {
             if (isCurrent(connected)) disconnectListener.accept(e.getMessage());
         } finally {
-            if (isCurrent(connected)) close();
+            closeIfCurrent(connected);
         }
     }
 
@@ -74,15 +74,33 @@ public class LanClient {
         return !closed && socket == connected;
     }
 
-    public synchronized void send(NetworkMessage message) {
-        if (closed || writer == null) throw new IllegalStateException("Chưa kết nối Server");
-        try {
-            writer.write(JsonUtil.toJson(message));
-            writer.newLine();
-            writer.flush();
-        } catch (IOException e) {
-            throw new IllegalStateException("Không gửi được dữ liệu đến Server", e);
+    public void send(NetworkMessage message) {
+        BufferedWriter connectedWriter;
+        Socket connected;
+        synchronized (this) {
+            if (closed || writer == null) throw new IllegalStateException("Chưa kết nối Server");
+            connectedWriter = writer;
+            connected = socket;
         }
+        // Serialize complete frames per connection, without holding the state
+        // monitor: close() must be able to close the socket and abort a stalled flush.
+        synchronized (connectedWriter) {
+            synchronized (this) {
+                if (closed || socket != connected || writer != connectedWriter)
+                    throw new IllegalStateException("Chưa kết nối Server");
+            }
+            try {
+                connectedWriter.write(JsonUtil.toJson(message));
+                connectedWriter.newLine();
+                connectedWriter.flush();
+            } catch (IOException e) {
+                throw new IllegalStateException("Không gửi được dữ liệu đến Server", e);
+            }
+        }
+    }
+
+    private synchronized void closeIfCurrent(Socket connected) {
+        if (socket == connected) close();
     }
 
     public synchronized void close() {

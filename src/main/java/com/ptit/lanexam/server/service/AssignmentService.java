@@ -93,6 +93,12 @@ public class AssignmentService {
     }
 
     public AssignmentSubmissionInfo submit(String studentCode, SubmitRequest request) {
+        return submit(studentCode, request, clock.instant());
+    }
+
+    /** receivedAt is captured by the server after reading the complete frame, never supplied by the client. */
+    public AssignmentSubmissionInfo submit(String studentCode, SubmitRequest request, Instant receivedAt) {
+        java.util.Objects.requireNonNull(receivedAt, "Thiếu thời điểm Server nhận bài nộp.");
         requireStudentCode(studentCode);
         if (request == null || request.assignmentId() == null)
             throw new IllegalArgumentException("Chưa chọn bài tập.");
@@ -105,8 +111,7 @@ public class AssignmentService {
             Assignment assignment = em.find(Assignment.class, request.assignmentId(), LockModeType.PESSIMISTIC_WRITE);
             if (assignment == null) throw new IllegalArgumentException("Không tìm thấy bài tập.");
             scope.require(assignment);
-            Instant now = clock.instant();
-            if (assignment.getDueAt() != null && !now.isBefore(assignment.getDueAt()))
+            if (assignment.getDueAt() != null && !receivedAt.isBefore(assignment.getDueAt()))
                 throw new IllegalStateException("Bài tập đã hết hạn nộp.");
             Student student = em.createQuery("select s from Student s where s.studentCode = :code", Student.class)
                     .setParameter("code", studentCode).getResultStream().findFirst()
@@ -121,7 +126,7 @@ public class AssignmentService {
             else if (!request.keepExistingFile()) submission.setFile(null, null);
             if (content.isEmpty() && submission.getFileData() == null)
                 throw new IllegalArgumentException("Nhập bài làm hoặc chọn tệp để nộp.");
-            submission.update(content, now);
+            submission.update(content, receivedAt);
             if (isNew) em.persist(submission);
             em.flush();
             AssignmentSubmissionInfo result = toInfo(submission);

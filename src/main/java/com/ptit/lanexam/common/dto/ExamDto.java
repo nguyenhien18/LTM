@@ -2,8 +2,6 @@ package com.ptit.lanexam.common.dto;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 public class ExamDto {
     private Long id;
@@ -11,7 +9,7 @@ public class ExamDto {
     private String subjectName;
     private int durationSeconds;
     private long deadlineEpochMillis;
-    private Map<Long, String> savedAnswers = new LinkedHashMap<>();
+    private long serverTimeEpochMillis;
     private List<QuestionDto> questions = new ArrayList<>();
 
     public ExamDto() {}
@@ -32,8 +30,8 @@ public class ExamDto {
     public void setDurationSeconds(int durationSeconds) { this.durationSeconds = durationSeconds; }
     public long getDeadlineEpochMillis() { return deadlineEpochMillis; }
     public void setDeadlineEpochMillis(long deadlineEpochMillis) { this.deadlineEpochMillis = deadlineEpochMillis; }
-    public Map<Long, String> getSavedAnswers() { return savedAnswers; }
-    public void setSavedAnswers(Map<Long, String> savedAnswers) { this.savedAnswers = savedAnswers; }
+    public long getServerTimeEpochMillis() { return serverTimeEpochMillis; }
+    public void setServerTimeEpochMillis(long serverTimeEpochMillis) { this.serverTimeEpochMillis = serverTimeEpochMillis; }
     public List<QuestionDto> getQuestions() { return questions; }
     public void setQuestions(List<QuestionDto> questions) { this.questions = questions; }
 }

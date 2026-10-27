@@ -1,8 +1,5 @@
 package com.ptit.lanexam.server.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.ptit.lanexam.common.JsonUtil;
 import com.ptit.lanexam.common.dto.ExamDto;
 import com.ptit.lanexam.common.dto.ExamOffer;
 import com.ptit.lanexam.common.dto.ExamHistoryItem;
@@ -16,6 +13,7 @@ import jakarta.persistence.EntityTransaction;
 import jakarta.persistence.LockModeType;
 
 import java.time.Instant;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,12 +23,74 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.function.Supplier;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ExamService {
     public static final int MAX_BANK_EXAM_QUESTIONS = 200;
-    private static final TypeReference<Map<Long, String>> ANSWER_TYPE = new TypeReference<>() {};
     private final Supplier<EntityManager> entityManagers;
     private final TeacherScope scope;
+    private final Clock clock;
+    // Current answers are used only for deadline grading, never persisted or sent
+    // back to a client. Rejoining an attempt always clears them.
+    private final Map<Long, Map<Long, String>> currentAnswers = new ConcurrentHashMap<>();
+    private final Object receiptLock = new Object();
+    private final Set<RequestReceipt> pendingRequests = new java.util.HashSet<>();
+
+    public Instant currentTime() { return clock.instant(); }
+
+    // Register immediately after a full frame is read, before parsing or waiting
+    // for a database slot. The timestamp is always supplied by the Server.
+    public RequestReceipt receiveRequest() {
+        synchronized (receiptLock) {
+            RequestReceipt receipt = new RequestReceipt(clock.instant());
+            pendingRequests.add(receipt);
+            return receipt;
+        }
+    }
+
+    public final class RequestReceipt implements AutoCloseable {
+        private final Instant receivedAt;
+        private String studentCode;
+        private Long examId;
+        private RequestReceipt(Instant receivedAt) { this.receivedAt = receivedAt; }
+        public Instant receivedAt() { return receivedAt; }
+        public void bind(String code, Long id) {
+            synchronized (receiptLock) {
+                studentCode = code; examId = id;
+                if (id == null) pendingRequests.remove(this);
+            }
+        }
+        @Override public void close() {
+            synchronized (receiptLock) { pendingRequests.remove(this); }
+        }
+    }
+
+    private boolean hasPendingAnswers(ExamAttempt attempt) {
+        synchronized (receiptLock) {
+            return pendingRequests.stream().anyMatch(receipt -> receipt.receivedAt.isBefore(attempt.getDeadlineAt())
+                    && (receipt.examId == null || receipt.studentCode == null || (receipt.examId.equals(attempt.getExam().getId())
+                    && java.util.Objects.equals(receipt.studentCode, attempt.getStudent().getStudentCode()))));
+        }
+    }
+
+    public void ensureCanStop() {
+        try (EntityManager em = entityManagers.get()) {
+            Instant deadline = em.createQuery("select max(e.deadlineAt) from Exam e where e.active = true and " + scope.predicate("e"), Instant.class)
+                    .getSingleResult();
+            if (deadline != null && clock.instant().isBefore(deadline)) {
+                int seconds = remainingSeconds(deadline);
+                throw new IllegalStateException("Ca thi đang diễn ra, còn " + (seconds / 60) + " phút " + (seconds % 60)
+                        + " giây. Chưa thể dừng Server, đóng cửa sổ hoặc đổi giáo viên.");
+            }
+        }
+        if (hasOpenAttempts()) throw new IllegalStateException("Còn sinh viên đang làm bài, kể cả sinh viên đã mất kết nối.");
+        finalizeExpiredAttempts();
+        try (EntityManager em = entityManagers.get()) {
+            long pending = em.createQuery("select count(a) from ExamAttempt a where a.submittedAt is null and " + scope.predicate("a.exam"), Long.class)
+                    .getSingleResult();
+            if (pending > 0) throw new IllegalStateException("Đang xử lý đáp án nhận trước hạn và lưu điểm. Hãy chờ hoàn tất trước khi dừng Server.");
+        }
+    }
 
     public ExamService() { this(JpaUtil::em); }
 
@@ -38,13 +98,18 @@ public class ExamService {
         this(entityManagers, null);
     }
     public ExamService(Supplier<EntityManager> entityManagers, Long teacherId) {
-        this.entityManagers = entityManagers; this.scope = new TeacherScope(teacherId);
+        this(entityManagers, teacherId, Clock.systemUTC());
+    }
+    public ExamService(Supplier<EntityManager> entityManagers, Long teacherId, Clock clock) {
+        this.entityManagers = entityManagers;
+        this.scope = new TeacherScope(teacherId);
+        this.clock = clock;
     }
     public boolean hasOpenAttempts() {
         try (EntityManager em = entityManagers.get()) {
             return em.createQuery("select count(a) from ExamAttempt a where " + scope.predicate("a.exam")
                             + " and a.submittedAt is null and a.deadlineAt > :now", Long.class)
-                    .setParameter("now", Instant.now()).getSingleResult() > 0;
+                    .setParameter("now", clock.instant()).getSingleResult() > 0;
         }
     }
 
@@ -157,6 +222,7 @@ public class ExamService {
 
     public ExamDto activateExam(Long examId) {
         if (examId == null) throw new IllegalArgumentException("Chưa chọn bài thi.");
+        finalizeExpiredAttempts();
         EntityManager em = entityManagers.get();
         EntityTransaction tx = em.getTransaction();
         try {
@@ -172,26 +238,35 @@ public class ExamService {
             Exam current = em.createQuery("select e from Exam e where e.active = true and " + scope.predicate("e") + " order by e.id desc", Exam.class)
                     .setMaxResults(1).getResultList().stream().findFirst().orElse(null);
             if (current != null) current = em.find(Exam.class, current.getId(), LockModeType.PESSIMISTIC_WRITE);
+            // Older databases did not store the opening time. Preserve the
+            // earliest existing start when this legacy round is republished.
+            if (current != null && current.getDeadlineAt() == null) {
+                Instant firstStart = em.createQuery("select min(a.startedAt) from ExamAttempt a where a.exam = :exam", Instant.class)
+                        .setParameter("exam", current).getSingleResult();
+                current.openAt(firstStart == null ? clock.instant() : firstStart);
+                em.createQuery("update ExamAttempt a set a.deadlineAt = :deadline where a.exam = :exam and a.submittedAt is null")
+                        .setParameter("deadline", current.getDeadlineAt()).setParameter("exam", current).executeUpdate();
+            }
             boolean sameTemplate = current != null && (examId.equals(current.getId())
                     || examId.equals(current.getTemplateExamId()));
             long openAttempts = em.createQuery("select count(a) from ExamAttempt a where a.exam.active = true "
                             + "and " + scope.predicate("a.exam") + " and a.submittedAt is null and a.deadlineAt > :now", Long.class)
-                    .setParameter("now", Instant.now()).getSingleResult();
+                    .setParameter("now", clock.instant()).getSingleResult();
             if (openAttempts > 0 && !sameTemplate)
                 throw new IllegalStateException("Còn sinh viên đang làm bài hiện tại. Hãy chờ nộp hoặc hết giờ trước khi đổi bài.");
-            if (sameTemplate) {
-                long priorAttempts = em.createQuery("select count(a) from ExamAttempt a where a.exam = :exam", Long.class)
-                        .setParameter("exam", current).getSingleResult();
-                long priorSubmissions = em.createQuery("select count(s) from Submission s where s.exam = :exam", Long.class)
-                        .setParameter("exam", current).getSingleResult();
-                if (openAttempts > 0 || (priorAttempts == 0 && priorSubmissions == 0)) {
-                    ExamDto unchanged = toDto(current);
-                    tx.commit();
-                    return unchanged;
-                }
+            if (sameTemplate && clock.instant().isBefore(current.getDeadlineAt())) {
+                ExamDto unchanged = toDto(current);
+                tx.commit();
+                return unchanged;
             }
+            if (current != null && current.getDeadlineAt() != null && clock.instant().isBefore(current.getDeadlineAt()))
+                throw new IllegalStateException("Ca thi đang diễn ra. Chờ hết giờ và chấm xong trước khi mở đề khác.");
+            long unfinished = em.createQuery("select count(a) from ExamAttempt a where a.submittedAt is null and " + scope.predicate("a.exam"), Long.class)
+                    .getSingleResult();
+            if (unfinished > 0) throw new IllegalStateException("Đang chấm các bài của ca cũ. Hãy chờ hoàn tất trước khi mở ca mới.");
             em.createQuery("update Exam e set e.active = false where e.active = true and " + scope.predicate("e")).executeUpdate();
             Exam round = new Exam(template.getTitle(), template.getDurationMinutes(), true);
+            round.openAt(clock.instant());
             scope.assign(round);
             round.setSubject(template.getSubject());
             round.setTemplateExamId(template.getId());
@@ -247,18 +322,20 @@ public class ExamService {
             Optional<ExamAttempt> open = em.createQuery("select a from ExamAttempt a "
                             + "where a.student.studentCode = :code and a.submittedAt is null "
                             + "and " + scope.predicate("a.exam") + " and a.deadlineAt > :now order by a.startedAt desc", ExamAttempt.class)
-                    .setParameter("code", studentCode).setParameter("now", Instant.now())
+                    .setParameter("code", studentCode).setParameter("now", clock.instant())
                     .setMaxResults(1).getResultList().stream().findFirst();
             if (open.isPresent()) {
                 ExamAttempt attempt = open.get();
                 Exam exam = attempt.getExam();
                 int seconds = (int) Math.min(Integer.MAX_VALUE,
-                        Math.max(0, (attempt.getDeadlineAt().toEpochMilli() - Instant.now().toEpochMilli() + 999) / 1000));
-                return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), seconds, true, exam.getSubjectName()));
+                        Math.max(0, (attempt.getDeadlineAt().toEpochMilli() - clock.instant().toEpochMilli() + 999) / 1000));
+                return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), seconds, true, exam.getSubjectName(),
+                        attempt.getDeadlineAt().toEpochMilli(), clock.instant().toEpochMilli()));
             }
             if (publishedExamId == null) return Optional.empty();
             Exam exam = em.find(Exam.class, publishedExamId);
-            if (exam == null || !exam.isActive()) return Optional.empty();
+            if (exam == null || !exam.isActive() || exam.getDeadlineAt() == null
+                    || !clock.instant().isBefore(exam.getDeadlineAt())) return Optional.empty();
             scope.require(exam);
             long prior = em.createQuery("select count(a) from ExamAttempt a "
                             + "where a.student.studentCode = :code and a.exam = :exam", Long.class)
@@ -267,7 +344,8 @@ public class ExamService {
                             + "where s.student.studentCode = :code and s.exam = :exam", Long.class)
                     .setParameter("code", studentCode).setParameter("exam", exam).getSingleResult();
             if (prior > 0 || submitted > 0) return Optional.empty();
-            return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), exam.getDurationMinutes() * 60, false, exam.getSubjectName()));
+            return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), remainingSeconds(exam.getDeadlineAt()), false, exam.getSubjectName(),
+                    exam.getDeadlineAt().toEpochMilli(), clock.instant().toEpochMilli()));
         } finally {
             em.close();
         }
@@ -289,6 +367,10 @@ public class ExamService {
     }
 
     public SubmitResult submit(String studentCode, SubmitExamRequest request) {
+        return submit(studentCode, request, clock.instant());
+    }
+
+    public SubmitResult submit(String studentCode, SubmitExamRequest request, Instant receivedAt) {
         EntityManager em = entityManagers.get();
         EntityTransaction tx = em.getTransaction();
         try {
@@ -296,15 +378,18 @@ public class ExamService {
             ExamAttempt attempt = requireAttempt(em, studentCode, request);
             Submission previous = findSubmission(em, attempt).orElse(null);
             if (previous != null) {
-                if (attempt.getSubmittedAt() == null) attempt.markSubmitted(Instant.now());
+                if (attempt.getSubmittedAt() == null) attempt.markSubmitted(clock.instant());
                 SubmitResult result = toResult(previous);
                 tx.commit();
                 return result;
             }
-            Map<Long, String> answers = attempt.isOpenAt(Instant.now())
-                    ? validateAnswers(attempt.getExam(), request.getAnswers()) : readDraft(attempt);
+            if (!receivedAt.isBefore(attempt.getDeadlineAt()) && hasPendingAnswers(attempt))
+                throw new IllegalStateException("Đang xử lý đáp án nhận trước hạn; Server sẽ gửi kết quả khi chấm xong.");
+            Map<Long, String> answers = attempt.isOpenAt(receivedAt)
+                    ? validateAnswers(attempt.getExam(), request.getAnswers()) : currentAnswers.getOrDefault(attempt.getId(), Map.of());
             SubmitResult result = persistSubmission(em, attempt, answers);
             tx.commit();
+            currentAnswers.remove(attempt.getId());
             return result;
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
@@ -325,6 +410,10 @@ public class ExamService {
             scope.require(exam);
             if (exam == null || !exam.isActive() || exam.getDurationMinutes() <= 0)
                 throw new IllegalStateException("Đề thi không hợp lệ.");
+            if (exam.getDeadlineAt() == null || !clock.instant().isBefore(exam.getDeadlineAt())) {
+                tx.commit();
+                return Optional.empty();
+            }
             long priorSubmissions = em.createQuery("select count(s) from Submission s "
                             + "where s.student = :student and s.exam = :exam", Long.class)
                     .setParameter("student", student).setParameter("exam", exam).getSingleResult();
@@ -334,13 +423,14 @@ public class ExamService {
             }
             ExamAttempt attempt = findAttempt(em, studentCode, examId, LockModeType.PESSIMISTIC_WRITE)
                     .orElseGet(() -> {
-                        ExamAttempt created = new ExamAttempt(student, exam, Instant.now());
+                        ExamAttempt created = new ExamAttempt(student, exam, clock.instant());
                         em.persist(created);
                         return created;
                     });
-            Optional<ExamDto> result = attempt.isOpenAt(Instant.now())
+            Optional<ExamDto> result = attempt.isOpenAt(clock.instant())
                     ? Optional.of(toDto(attempt)) : Optional.empty();
             tx.commit();
+            if (result.isPresent()) currentAnswers.remove(attempt.getId());
             return result;
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
@@ -355,7 +445,7 @@ public class ExamService {
         try {
             return em.createQuery("select a from ExamAttempt a where a.student.studentCode = :code "
                             + "and " + scope.predicate("a.exam") + " and a.submittedAt is null and a.deadlineAt > :now order by a.startedAt desc", ExamAttempt.class)
-                    .setParameter("code", studentCode).setParameter("now", Instant.now())
+                    .setParameter("code", studentCode).setParameter("now", clock.instant())
                     .setMaxResults(1).getResultStream().findFirst().map(this::toDto);
         } finally {
             em.close();
@@ -383,18 +473,22 @@ public class ExamService {
         } finally { em.close(); }
     }
 
-    public void saveDraft(String studentCode, SubmitExamRequest request) {
+    public void updateAnswers(String studentCode, SubmitExamRequest request) {
+        updateAnswers(studentCode, request, clock.instant());
+    }
+
+    public void updateAnswers(String studentCode, SubmitExamRequest request, Instant receivedAt) {
         EntityManager em = entityManagers.get();
         EntityTransaction tx = em.getTransaction();
         try {
             tx.begin();
             ExamAttempt attempt = requireAttempt(em, studentCode, request);
-            if (!attempt.isOpenAt(Instant.now())) {
+            if (!attempt.isOpenAt(receivedAt)) {
                 tx.commit();
                 return;
             }
             Map<Long, String> answers = validateAnswers(attempt.getExam(), request.getAnswers());
-            attempt.setDraftAnswers(JsonUtil.MAPPER.valueToTree(answers).toString());
+            currentAnswers.put(attempt.getId(), new java.util.HashMap<>(answers));
             tx.commit();
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
@@ -410,7 +504,7 @@ public class ExamService {
         try {
             ids = em.createQuery("select a.id from ExamAttempt a where a.submittedAt is null "
                             + "and a.deadlineAt <= :now", Long.class)
-                    .setParameter("now", Instant.now()).getResultList();
+                    .setParameter("now", clock.instant()).getResultList();
         } finally {
             em.close();
         }
@@ -423,11 +517,16 @@ public class ExamService {
         try {
             tx.begin();
             ExamAttempt attempt = em.find(ExamAttempt.class, id, LockModeType.PESSIMISTIC_WRITE);
-            if (attempt != null && attempt.getSubmittedAt() == null && !attempt.isOpenAt(Instant.now())) {
-                if (findSubmission(em, attempt).isPresent()) attempt.markSubmitted(Instant.now());
-                else persistSubmission(em, attempt, readDraft(attempt));
+            if (attempt != null && hasPendingAnswers(attempt)) {
+                tx.commit();
+                return;
+            }
+            if (attempt != null && attempt.getSubmittedAt() == null && !attempt.isOpenAt(clock.instant())) {
+                if (findSubmission(em, attempt).isPresent()) attempt.markSubmitted(clock.instant());
+                else persistSubmission(em, attempt, currentAnswers.getOrDefault(attempt.getId(), Map.of()));
             }
             tx.commit();
+            currentAnswers.remove(id);
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
             throw e;
@@ -439,7 +538,7 @@ public class ExamService {
     private SubmitResult persistSubmission(EntityManager em, ExamAttempt attempt, Map<Long, String> answers) {
         Exam exam = attempt.getExam();
         int correct = 0;
-        Submission submission = new Submission(attempt.getStudent(), exam, 0, LocalDateTime.now());
+        Submission submission = new Submission(attempt.getStudent(), exam, 0, LocalDateTime.ofInstant(clock.instant(), java.time.ZoneId.systemDefault()));
         for (Question question : exam.getQuestions()) {
             String answer = answers.get(question.getId());
             boolean right = isCorrect(question, answer);
@@ -450,7 +549,7 @@ public class ExamService {
         double score = total == 0 ? 0 : Math.round(correct * 1000.0 / total) / 100.0;
         submission.setScore(score);
         em.persist(submission);
-        attempt.markSubmitted(Instant.now());
+        attempt.markSubmitted(clock.instant());
         return new SubmitResult(score, correct, total, "Nộp bài thành công");
     }
 
@@ -486,20 +585,17 @@ public class ExamService {
         return answers;
     }
 
-    private Map<Long, String> readDraft(ExamAttempt attempt) {
-        try {
-            return JsonUtil.MAPPER.readValue(attempt.getDraftAnswers(), ANSWER_TYPE);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Không đọc được bài làm đã lưu.", e);
-        }
+    private int remainingSeconds(Instant deadline) {
+        return (int) Math.min(Integer.MAX_VALUE,
+                Math.max(0, (deadline.toEpochMilli() - clock.instant().toEpochMilli() + 999) / 1000));
     }
 
     private ExamDto toDto(ExamAttempt attempt) {
         ExamDto dto = toDto(attempt.getExam());
-        long remainingMillis = Math.max(0, attempt.getDeadlineAt().toEpochMilli() - Instant.now().toEpochMilli());
+        long remainingMillis = Math.max(0, attempt.getDeadlineAt().toEpochMilli() - clock.instant().toEpochMilli());
         dto.setDurationSeconds((int) Math.min(Integer.MAX_VALUE, (remainingMillis + 999) / 1000));
         dto.setDeadlineEpochMillis(attempt.getDeadlineAt().toEpochMilli());
-        dto.setSavedAnswers(readDraft(attempt));
+        dto.setServerTimeEpochMillis(clock.instant().toEpochMilli());
         return dto;
     }
 
@@ -522,7 +618,10 @@ public class ExamService {
             }
             questions.add(new QuestionDto(q.getId(), q.getContent(), q.getType().name(), options));
         }
-        ExamDto dto = new ExamDto(exam.getId(), exam.getTitle(), exam.getDurationMinutes() * 60, questions);
+        ExamDto dto = new ExamDto(exam.getId(), exam.getTitle(),
+                exam.getDeadlineAt() == null ? exam.getDurationMinutes() * 60 : remainingSeconds(exam.getDeadlineAt()), questions);
+        if (exam.getDeadlineAt() != null) dto.setDeadlineEpochMillis(exam.getDeadlineAt().toEpochMilli());
+        dto.setServerTimeEpochMillis(clock.instant().toEpochMilli());
         dto.setSubjectName(exam.getSubjectName());
         return dto;
     }

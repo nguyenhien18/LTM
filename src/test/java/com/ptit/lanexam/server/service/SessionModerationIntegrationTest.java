@@ -54,6 +54,72 @@ class SessionModerationIntegrationTest {
         if (factory != null) factory.close();
     }
 
+    @Test @Timeout(60)
+    void eightyStudentsCanLoginAndSubmitWhileAllConnectionsStayOpen() throws Exception {
+        int studentCount = 80;
+        try (EntityManager em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            for (int index = 0; index < studentCount; index++)
+                em.persist(new Student("CLASS" + index, "Sinh viên " + index, LocalDate.of(2003, 5, 12)));
+            em.getTransaction().commit();
+        }
+        ExamDto round = publish("Đề cho lớp 80 sinh viên");
+        List<Peer> classroom = new ArrayList<>();
+        for (int index = 0; index < studentCount; index++) classroom.add(connect());
+
+        try (ExecutorService requests = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Callable<Void>> logins = new ArrayList<>();
+            for (int index = 0; index < studentCount; index++) {
+                Peer peer = classroom.get(index);
+                String code = "CLASS" + index;
+                logins.add(() -> {
+                    peer.sendLogin(code);
+                    assertTrue(JsonUtil.payload(peer.await(MessageType.LOGIN_RESULT), LoginResponse.class).isSuccess(), code);
+                    peer.await(MessageType.ASSIGNMENTS_RESULT);
+                    return null;
+                });
+            }
+            for (Future<Void> login : requests.invokeAll(logins, 15, TimeUnit.SECONDS)) login.get();
+            assertEquals(studentCount, registry.allSessions().size());
+
+            List<Callable<Void>> attempts = new ArrayList<>();
+            for (Peer peer : classroom) attempts.add(() -> {
+                peer.send(MessageType.PING, null);
+                peer.await(MessageType.PONG);
+                peer.join(round.getId());
+                peer.send(MessageType.ANSWER_UPDATE, new SubmitExamRequest(round.getId(),
+                        Map.of(round.getQuestions().getFirst().getId(), "A")));
+                peer.send(MessageType.PING, null);
+                peer.await(MessageType.PONG); // Confirms the preceding answer update was processed.
+                return null;
+            });
+            for (Future<Void> attempt : requests.invokeAll(attempts, 20, TimeUnit.SECONDS)) attempt.get();
+
+            try (EntityManager em = factory.createEntityManager()) {
+                em.getTransaction().begin();
+                em.createQuery("update ExamAttempt a set a.deadlineAt = :past where a.exam.id = :id")
+                        .setParameter("past", Instant.now().minusSeconds(1)).setParameter("id", round.getId()).executeUpdate();
+                em.getTransaction().commit();
+            }
+            List<Callable<Void>> results = new ArrayList<>();
+            for (Peer peer : classroom) results.add(() -> {
+                assertEquals(10.0, JsonUtil.payload(peer.await(MessageType.SUBMIT_RESULT), SubmitResult.class).getScore());
+                peer.await(MessageType.EXAM_AVAILABLE);
+                return null;
+            });
+            for (Future<Void> result : requests.invokeAll(results, 20, TimeUnit.SECONDS)) result.get();
+        }
+
+        assertEquals(studentCount, registry.allSessions().size());
+        assertTrue(registry.allSessions().stream().allMatch(session -> session.getStatus() == ClientStatus.SUBMITTED));
+        List<ExamResultRow> results = exams.listResults();
+        assertEquals(studentCount, results.size());
+        assertTrue(results.stream().allMatch(result -> result.score() == 10.0));
+        assertTrue(classroom.stream().allMatch(peer -> peer.disconnections.isEmpty()));
+        server.stop();
+        awaitCondition(() -> registry.allSessions().isEmpty());
+    }
+
     @Test void loginStatusBelongsToThisSessionAndNewRoundCanBeJoined() throws Exception {
         ExamDto first = publish("Đề 1");
         Peer peer = login("ST001");
@@ -138,13 +204,13 @@ class SessionModerationIntegrationTest {
         assertProgress(ClientStatus.ONLINE, null);
     }
 
-    @Test void timeoutUpdatesLiveStatusAndLockPreservesLastSavedDraft() throws Exception {
+    @Test void timeoutGradesCurrentSessionEvenAfterAccountLock() throws Exception {
         ExamDto round = publish("Đề hết giờ");
         Peer peer = login("ST001");
         peer.join(round.getId());
-        peer.send(MessageType.SAVE_DRAFT, new SubmitExamRequest(round.getId(), Map.of(round.getQuestions().getFirst().getId(), "A")));
+        peer.send(MessageType.ANSWER_UPDATE, new SubmitExamRequest(round.getId(), Map.of(round.getQuestions().getFirst().getId(), "A")));
         peer.send(MessageType.PING, null);
-        peer.await(MessageType.PONG); // All earlier requests, including the draft, have completed.
+        peer.await(MessageType.PONG); // All earlier requests, including the answer update, have completed.
         expireAttempt("ST001");
         peer.await(MessageType.SUBMIT_RESULT);
         assertProgress(ClientStatus.SUBMITTED, round.getId());
@@ -153,7 +219,7 @@ class SessionModerationIntegrationTest {
         ExamDto next = publish("Đề bị khóa giữa giờ");
         peer.await(MessageType.EXAM_AVAILABLE);
         peer.join(next.getId());
-        peer.send(MessageType.SAVE_DRAFT, new SubmitExamRequest(next.getId(), Map.of(next.getQuestions().getFirst().getId(), "A")));
+        peer.send(MessageType.ANSWER_UPDATE, new SubmitExamRequest(next.getId(), Map.of(next.getQuestions().getFirst().getId(), "A")));
         peer.send(MessageType.PING, null);
         peer.await(MessageType.PONG);
         server.lockAccount("ST001", "Vi phạm");
@@ -188,6 +254,14 @@ class SessionModerationIntegrationTest {
     }
 
     private ExamDto publish(String title) {
+        try (EntityManager em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            em.createQuery("update ExamAttempt a set a.deadlineAt = :past where a.exam.active = true")
+                    .setParameter("past", Instant.now().minusSeconds(1)).executeUpdate();
+            em.createQuery("update Exam e set e.deadlineAt = :past where e.active = true")
+                    .setParameter("past", Instant.now().minusSeconds(1)).executeUpdate();
+            em.getTransaction().commit();
+        }
         ExamSummary template = exams.createExam(new ExamDraft(title, 20, List.of(new ExamDraft.QuestionDraft(
                 "Chọn A", QuestionType.MULTIPLE_CHOICE, "Một", "Hai", "Ba", "Bốn", "A"))));
         ExamDto round = exams.activateExam(template.id());

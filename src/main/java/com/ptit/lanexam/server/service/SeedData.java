@@ -41,7 +41,7 @@ public final class SeedData {
 
             long examCount = em.createQuery("select count(e) from Exam e", Long.class).getSingleResult();
             if (examCount == 0) {
-                Exam exam = new Exam("Bài kiểm tra Lập trình mạng - Demo", 20, true);
+                Exam exam = new Exam("Bài kiểm tra Lập trình mạng - Demo", 20, false);
                 exam.addQuestion(new Question(
                         "TCP hoạt động chủ yếu ở tầng nào trong mô hình TCP/IP?",
                         QuestionType.MULTIPLE_CHOICE,

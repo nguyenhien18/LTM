@@ -28,17 +28,14 @@ public class ExamAttempt {
     @Column(name = "submitted_at")
     private Instant submittedAt;
 
-    @Lob
-    @Column(name = "draft_answers", columnDefinition = "LONGTEXT")
-    private String draftAnswers = "{}";
-
     protected ExamAttempt() {}
 
     public ExamAttempt(Student student, Exam exam, Instant startedAt) {
         this.student = student;
         this.exam = exam;
         this.startedAt = startedAt;
-        this.deadlineAt = startedAt.plusSeconds(Math.multiplyExact((long) exam.getDurationMinutes(), 60));
+        this.deadlineAt = exam.getDeadlineAt() != null ? exam.getDeadlineAt()
+                : startedAt.plusSeconds(Math.multiplyExact((long) exam.getDurationMinutes(), 60));
     }
 
     public Long getId() { return id; }
@@ -47,8 +44,6 @@ public class ExamAttempt {
     public Instant getStartedAt() { return startedAt; }
     public Instant getDeadlineAt() { return deadlineAt; }
     public Instant getSubmittedAt() { return submittedAt; }
-    public String getDraftAnswers() { return draftAnswers; }
-    public void setDraftAnswers(String draftAnswers) { this.draftAnswers = draftAnswers; }
     public void markSubmitted(Instant submittedAt) { this.submittedAt = submittedAt; }
     public boolean isOpenAt(Instant now) { return submittedAt == null && now.isBefore(deadlineAt); }
 }

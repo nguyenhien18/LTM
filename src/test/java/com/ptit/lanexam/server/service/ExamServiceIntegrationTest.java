@@ -15,6 +15,9 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.Clock;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.List;
 import java.util.UUID;
@@ -26,6 +29,7 @@ public class ExamServiceIntegrationTest {
     private ExamService service;
     private Long examId;
     private Long questionId;
+    private final MutableClock clock = new MutableClock();
 
     @BeforeEach
     void setUp() {
@@ -37,12 +41,13 @@ public class ExamServiceIntegrationTest {
                 "jakarta.persistence.jdbc.password", "",
                 "hibernate.hbm2ddl.auto", "create-drop",
                 "hibernate.dialect", "org.hibernate.dialect.H2Dialect"));
-        service = new ExamService(factory::createEntityManager);
+        service = new ExamService(factory::createEntityManager, null, clock);
         EntityManager em = factory.createEntityManager();
         try {
             em.getTransaction().begin();
             em.persist(new Student("ST001", "Test Student", LocalDate.of(2003, 5, 12)));
             Exam exam = new Exam("Test Exam", 1, true);
+            exam.openAt(clock.instant());
             exam.addQuestion(new Question("Correct option?", QuestionType.MULTIPLE_CHOICE,
                     "Yes", "No", "Maybe", "Unknown", "A"));
             em.persist(exam);
@@ -77,36 +82,31 @@ public class ExamServiceIntegrationTest {
     }
 
     @Test
-    void restoresSavedAnswersOnReconnect() {
-        service.startAttempt("ST001", examId).orElseThrow();
-        service.saveDraft("ST001", new SubmitExamRequest(examId, Map.of(questionId, "B")));
-        ExamDto restored = service.getOpenAttempt("ST001").orElseThrow();
-        assertEquals("B", restored.getSavedAnswers().get(questionId));
-        assertThrows(IllegalArgumentException.class, () -> service.saveDraft("ST001",
+    void rejoiningClearsAnswersWithoutExtendingDeadline() {
+        ExamDto first = service.startAttempt("ST001", examId).orElseThrow();
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
+        clock.advance(20);
+        ExamDto restarted = service.startAttempt("ST001", examId).orElseThrow();
+        assertEquals(first.getDeadlineEpochMillis(), restarted.getDeadlineEpochMillis());
+        assertEquals(40, restarted.getDurationSeconds());
+        assertFalse(com.ptit.lanexam.common.JsonUtil.MAPPER.valueToTree(restarted).has("savedAnswers"));
+        assertThrows(IllegalArgumentException.class, () -> service.updateAnswers("ST001",
                 new SubmitExamRequest(examId, Map.of(-1L, "A"))));
+        clock.advance(41);
+        service.finalizeExpiredAttempts();
+        assertEquals(0.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
     }
 
     @Test
-    void expiryGradesSavedDraftAndIgnoresLateAnswers() {
-        EntityManager em = factory.createEntityManager();
-        try {
-            em.getTransaction().begin();
-            Student student = em.createQuery("select s from Student s where s.studentCode = 'ST001'", Student.class)
-                    .getSingleResult();
-            Exam exam = em.find(Exam.class, examId);
-            ExamAttempt expired = new ExamAttempt(student, exam, Instant.now().minusSeconds(120));
-            expired.setDraftAnswers("{\"" + questionId + "\":\"B\"}");
-            em.persist(expired);
-            em.getTransaction().commit();
-        } finally {
-            em.close();
-        }
-
+    void expiryGradesCurrentSessionAndIgnoresLateAnswers() {
+        service.startAttempt("ST001", examId).orElseThrow();
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
+        clock.advance(61);
         service.finalizeExpiredAttempts();
-        service.saveDraft("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
-        SubmitResult result = service.submit("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
-        assertEquals(0.0, result.getScore());
-        assertEquals(0.0, service.getCurrentExamResult("ST001").orElseThrow().getScore());
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "B")));
+        SubmitResult result = service.submit("ST001", new SubmitExamRequest(examId, Map.of(questionId, "B")));
+        assertEquals(10.0, result.getScore());
+        assertEquals(10.0, service.getCurrentExamResult("ST001").orElseThrow().getScore());
         assertEquals(1L, submissionCount());
     }
 
@@ -126,6 +126,7 @@ public class ExamServiceIntegrationTest {
                 service.getOpenAttempt("ST001").orElseThrow().getDeadlineEpochMillis());
 
         service.submit("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
+        clock.advance(61);
         ExamDto opened = service.activateExam(created.id());
         assertNotEquals(created.id(), opened.getId());
         assertEquals("Teacher exam", service.getActiveExam().getTitle());
@@ -142,6 +143,7 @@ public class ExamServiceIntegrationTest {
         assertEquals(1, results.getFirst().correct());
         assertEquals(1, results.getFirst().total());
 
+        clock.advance(30 * 60 + 1);
         ExamDto reopenedOld = service.activateExam(examId);
         assertNotEquals(examId, reopenedOld.getId());
         assertEquals(reopenedOld.getId(), service.getActiveExam().getId());
@@ -160,7 +162,8 @@ public class ExamServiceIntegrationTest {
         assertEquals(firstAttempt.getDeadlineEpochMillis(),
                 service.startAttempt("ST001", first.getId()).orElseThrow().getDeadlineEpochMillis());
 
-        service.submit("ST001", new SubmitExamRequest(first.getId(), Map.of(questionId, "A")));
+        service.submit("ST001", new SubmitExamRequest(first.getId(), Map.of(firstAttempt.getQuestions().getFirst().getId(), "A")));
+        clock.advance(61);
         ExamDto second = service.activateExam(examId);
         assertNotEquals(first.getId(), second.getId());
         assertEquals(1, service.listExams().size());
@@ -240,14 +243,89 @@ public class ExamServiceIntegrationTest {
         }
     }
 
+    @Test void lateStudentsUseTheOpeningDeadlineAndCannotJoinAfterIt() {
+        long deadline = service.getActiveExam().getDeadlineEpochMillis();
+        clock.advance(25);
+        ExamDto late = service.startAttempt("ST001", examId).orElseThrow();
+        assertEquals(deadline, late.getDeadlineEpochMillis());
+        assertEquals(35, late.getDurationSeconds());
+        clock.advance(35);
+        assertTrue(service.findOffer("ST001", examId).isEmpty());
+        assertTrue(service.startAttempt("ST001", examId).isEmpty());
+        service.finalizeExpiredAttempts();
+        assertEquals(0.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
+    }
+
+    @Test void answersNeverCrossStudents() {
+        try (EntityManager em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            em.persist(new Student("ST002", "Student B", LocalDate.of(2003, 5, 12)));
+            em.getTransaction().commit();
+        }
+        service.startAttempt("ST001", examId).orElseThrow();
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
+        service.startAttempt("ST002", examId).orElseThrow();
+        clock.advance(61);
+        service.finalizeExpiredAttempts();
+        assertEquals(10.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
+        assertEquals(0.0, service.getExamResult("ST002", examId).orElseThrow().getScore());
+    }
+
+    @Test void serverRestartKeepsDeadlineButDoesNotRestoreAnswers() {
+        long deadline = service.startAttempt("ST001", examId).orElseThrow().getDeadlineEpochMillis();
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
+        service = new ExamService(factory::createEntityManager, null, clock);
+        clock.advance(15);
+        assertEquals(deadline, service.getOpenAttempt("ST001").orElseThrow().getDeadlineEpochMillis());
+        clock.advance(46);
+        service.finalizeExpiredAttempts();
+        assertEquals(0.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now = Instant.now();
+        void advance(long seconds) { now = now.plusSeconds(seconds); }
+        @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
+    }
+
+    @Test void timelyQueuedAnswerDefersGradingUntilItIsProcessedAndLateAnswersCannotChangeIt() {
+        service.startAttempt("ST001", examId).orElseThrow();
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "B")));
+        clock.advance(59);
+        try (var receipt = service.receiveRequest()) {
+            receipt.bind("ST001", examId);
+            clock.advance(2);
+            service.finalizeExpiredAttempts();
+            assertTrue(service.getExamResult("ST001", examId).isEmpty());
+            assertThrows(IllegalStateException.class, service::ensureCanStop);
+            service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")), receipt.receivedAt());
+        }
+        service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "B")));
+        service.finalizeExpiredAttempts();
+        assertEquals(10.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
+        assertDoesNotThrow(service::ensureCanStop);
+    }
+
+    @Test void publishedRoundBlocksStopEvenBeforeAnyoneJoinsAndAfterEveryoneSubmitsEarly() {
+        assertThrows(IllegalStateException.class, service::ensureCanStop);
+        service.startAttempt("ST001", examId).orElseThrow();
+        service.submit("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
+        assertThrows(IllegalStateException.class, service::ensureCanStop);
+        assertEquals(examId, service.activateExam(examId).getId());
+        clock.advance(61);
+        assertDoesNotThrow(service::ensureCanStop);
+    }
+
     // Allows the same integration cases to run with cached jars when Maven is unavailable.
     public static void main(String[] args) {
         ExamServiceIntegrationTest test = new ExamServiceIntegrationTest();
         try { test.setUp(); test.requiresPublishedAttemptAndRejectsDuplicateGrading(); }
         finally { test.tearDown(); }
-        try { test.setUp(); test.restoresSavedAnswersOnReconnect(); }
+        try { test.setUp(); test.rejoiningClearsAnswersWithoutExtendingDeadline(); }
         finally { test.tearDown(); }
-        try { test.setUp(); test.expiryGradesSavedDraftAndIgnoresLateAnswers(); }
+        try { test.setUp(); test.expiryGradesCurrentSessionAndIgnoresLateAnswers(); }
         finally { test.tearDown(); }
         try { test.setUp(); test.teacherCreatesExamAndReadsSavedScores(); }
         finally { test.tearDown(); }
