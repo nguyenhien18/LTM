@@ -44,8 +44,7 @@ class ServerLifecycleIntegrationTest {
     }
 
     private void start(ExamService service) throws Exception {
-        server = new ExamServer(new SessionRegistry(), new AuthService(factory::createEntityManager), service,
-                new AssignmentService(factory::createEntityManager));
+        server = new ExamServer(new SessionRegistry(), new AuthService(factory::createEntityManager), service);
         server.start(0);
     }
 
@@ -70,7 +69,6 @@ class ServerLifecycleIntegrationTest {
         try {
             client.connect("127.0.0.1", server.getPort());
             client.send(JsonUtil.message(MessageType.LOGIN, new LoginRequest("ST001", "2003-05-12")));
-            await(messages, MessageType.ASSIGNMENTS_RESULT);
             client.send(JsonUtil.message(MessageType.JOIN_EXAM, new JoinExamRequest(round.getId())));
             await(messages, MessageType.EXAM_STARTED);
             long question = round.getQuestions().getFirst().getId();

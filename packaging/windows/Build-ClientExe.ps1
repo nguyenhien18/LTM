@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot 'dist' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot 'dist\current' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not $JdkHome -or -not (Test-Path -LiteralPath (Join-Path $JdkHome 'bin\jpackage.exe'))) {
     $packager = Get-Command jpackage.exe -ErrorAction SilentlyContinue
@@ -52,7 +52,8 @@ try {
     Invoke-Checked $javaTools.jar @('--create', '--file', (Join-Path $inputDirectory 'lan-exam-client.jar'),
         '--main-class', 'com.ptit.lanexam.client.ClientLauncher',
         '-C', (Join-Path $projectRoot 'target\classes'), 'com/ptit/lanexam/client',
-        '-C', (Join-Path $projectRoot 'target\classes'), 'com/ptit/lanexam/common')
+        '-C', (Join-Path $projectRoot 'target\classes'), 'com/ptit/lanexam/common',
+        '-C', (Join-Path $projectRoot 'target\classes'), 'styles')
     [xml]$pom = Get-Content -LiteralPath (Join-Path $projectRoot 'pom.xml') -Raw
     $javafxVersion = [string]$pom.project.properties.'javafx.version'
     $jacksonVersion = [string]$pom.project.properties.'jackson.version'

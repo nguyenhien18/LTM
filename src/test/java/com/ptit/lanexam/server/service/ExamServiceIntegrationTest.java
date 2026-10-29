@@ -82,19 +82,19 @@ public class ExamServiceIntegrationTest {
     }
 
     @Test
-    void rejoiningClearsAnswersWithoutExtendingDeadline() {
+    void rejoiningRestoresAnswersWithoutExtendingDeadline() {
         ExamDto first = service.startAttempt("ST001", examId).orElseThrow();
         service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
         clock.advance(20);
         ExamDto restarted = service.startAttempt("ST001", examId).orElseThrow();
         assertEquals(first.getDeadlineEpochMillis(), restarted.getDeadlineEpochMillis());
         assertEquals(40, restarted.getDurationSeconds());
-        assertFalse(com.ptit.lanexam.common.JsonUtil.MAPPER.valueToTree(restarted).has("savedAnswers"));
+        assertEquals(Map.of(questionId, "A"), restarted.getSavedAnswers());
         assertThrows(IllegalArgumentException.class, () -> service.updateAnswers("ST001",
                 new SubmitExamRequest(examId, Map.of(-1L, "A"))));
         clock.advance(41);
         service.finalizeExpiredAttempts();
-        assertEquals(0.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
+        assertEquals(10.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
     }
 
     @Test
@@ -271,15 +271,16 @@ public class ExamServiceIntegrationTest {
         assertEquals(0.0, service.getExamResult("ST002", examId).orElseThrow().getScore());
     }
 
-    @Test void serverRestartKeepsDeadlineButDoesNotRestoreAnswers() {
+    @Test void serverRestartKeepsDeadlineAndRestoresAnswers() {
         long deadline = service.startAttempt("ST001", examId).orElseThrow().getDeadlineEpochMillis();
         service.updateAnswers("ST001", new SubmitExamRequest(examId, Map.of(questionId, "A")));
         service = new ExamService(factory::createEntityManager, null, clock);
         clock.advance(15);
         assertEquals(deadline, service.getOpenAttempt("ST001").orElseThrow().getDeadlineEpochMillis());
+        assertEquals(Map.of(questionId, "A"), service.getOpenAttempt("ST001").orElseThrow().getSavedAnswers());
         clock.advance(46);
         service.finalizeExpiredAttempts();
-        assertEquals(0.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
+        assertEquals(10.0, service.getExamResult("ST001", examId).orElseThrow().getScore());
     }
 
     private static final class MutableClock extends Clock {
@@ -323,7 +324,7 @@ public class ExamServiceIntegrationTest {
         ExamServiceIntegrationTest test = new ExamServiceIntegrationTest();
         try { test.setUp(); test.requiresPublishedAttemptAndRejectsDuplicateGrading(); }
         finally { test.tearDown(); }
-        try { test.setUp(); test.rejoiningClearsAnswersWithoutExtendingDeadline(); }
+        try { test.setUp(); test.rejoiningRestoresAnswersWithoutExtendingDeadline(); }
         finally { test.tearDown(); }
         try { test.setUp(); test.expiryGradesCurrentSessionAndIgnoresLateAnswers(); }
         finally { test.tearDown(); }

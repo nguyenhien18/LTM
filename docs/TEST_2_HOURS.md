@@ -1,79 +1,43 @@
-# Kịch bản test trong khoảng 2 giờ
+# Kịch bản kiểm thử và demo
 
-Không cần để một bài thi chạy đủ 2 giờ. Mục tiêu là trong buổi test có thể kiểm tra toàn bộ luồng mạng và chức năng chính.
+## Chuẩn bị
 
-| TC | Nội dung | Kết quả mong đợi |
+Dùng database thử/bản sao, một Server MySQL và ít nhất hai máy Client trong LAN. Dùng dist/current/LANExamClient.exe; kiểm tra firewall/IP/cổng. Đề 1–2 phút giúp demo nhanh. Không cố ý dừng tiến trình của ca thi thật.
+
+| TC | Thao tác | Kết quả mong đợi |
 |---|---|---|
-| TC01 | Tạo/đăng nhập tài khoản giáo viên rồi khởi động Server | Hiện họ tên/tên đăng nhập đúng; Server lắng nghe port 5000 |
-| TC02 | Client A kết nối | Server nhận socket |
-| TC03 | Login sai | Client nhận thông báo thất bại |
-| TC04 | Login đúng | Server hiện MSV + IP + ONLINE |
-| TC05 | Client B login | Server quản lý đồng thời 2 Client |
-| TC06 | Server mở danh sách đề, chọn một bài thi | Cả 2 Client thấy thông tin đúng đề đã chọn; chưa tính giờ khi chưa tham gia |
-| TC06a | Client bấm Tham gia bài thi | Nhận câu hỏi và thời gian còn lại tính từ lúc giảng viên mở đề; Server hiện DOING_EXAM |
-| TC07 | Client làm bài | Giao diện lưu lựa chọn hiện tại |
-| TC08 | Client A nộp | Server lưu bài, chấm điểm, status SUBMITTED |
-| TC09 | Client nhận điểm | Hiện score và số câu đúng |
-| TC10 | Hết giờ | Client tự động gửi SUBMIT_EXAM |
-| TC11 | Đóng Client | Server loại socket khỏi danh sách online |
-| TC12 | Cho 80 Client đăng nhập, giữ toàn bộ kết nối rồi cùng tham gia, đổi đáp án và chờ hết giờ tự chấm | Tất cả nhận phản hồi đăng nhập; Server có 80 phiên và lưu đủ 80 kết quả, không phải đóng 8 Client đầu để các Client sau được xử lý |
-| TC13 | Đóng Client giữa giờ rồi đăng nhập lại | Trang chính có Làm lại từ đầu; bấm vào nhận bài trống, hạn nộp không thay đổi |
-| TC14 | Bấm Mở bài thi lần nữa | Không đặt lại hạn nộp của lượt thi cũ |
-| TC15 | Gửi `SUBMIT_EXAM` hai lần | Chỉ có một dòng `submissions`, kết quả không đổi |
-| TC16 | Gửi `SUBMIT_EXAM` trước khi tham gia | Server từ chối |
-| TC17 | Mất mạng đến hết giờ | Server chấm lựa chọn đã nhận trong RAM; đăng nhập lại xem kết quả |
-| TC18 | Giảng viên tạo môn và hai câu trắc nghiệm trong ngân hàng, sau đó tạo đề 2 phút từ hai câu đó | Đề xuất hiện trong danh sách với đúng môn; Client chỉ thấy đề sau khi giảng viên chọn mở |
-| TC19 | Tạo đề mới khi còn sinh viên đang làm, rồi chọn mở đề mới | Tạo và lưu được; Server từ chối mở đề khác cho đến khi ca cũ hết giờ và chấm xong |
-| TC20 | Mở Xem điểm sau khi nộp và sau khi Client thoát | Điểm, số câu đúng, tên đề và thời gian nộp vẫn hiện; Làm mới cập nhật bài mới |
-| TC21 | Client xem điểm, bấm Về trang chính rồi Đổi tài khoản | Trang chính giữ kết nối và có lịch sử; đăng xuất trở lại trang đăng nhập, Server xóa phiên online cũ |
-| TC22 | Đăng nhập lại bằng MSV vừa nộp | Trang chính hiện lịch sử điểm, không mời tham gia lại đề đã nộp |
-| TC23 | Sau khi ca hết giờ và chấm xong, Server chọn mở lại chính đề đó | Client đã nộp thấy bài thi mới để tham gia; lịch sử vẫn có điểm đợt cũ |
-| TC24 | Cùng sinh viên nộp bài ở đợt mở lại | Lịch sử Client và bảng điểm Server có hai dòng, mã lượt khác nhau; không ghi đè điểm cũ |
-| TC25 | Server bấm Bài tập / Bài nộp và giao bài có tệp đề | Client online tự thấy bài trong tab Bài tập; Client đăng nhập sau cũng thấy |
-| TC26 | Client tải đề, nộp nội dung kèm ZIP rồi đăng nhập lại | Nội dung, tên tệp, thời gian nộp vẫn hiện; tệp tải lại có nội dung đúng |
-| TC27 | Client nộp lại trước hạn | Giảng viên chỉ thấy một dòng cho học viên, với nội dung và thời gian nộp mới |
-| TC28 | Client sửa nội dung mà không chọn tệp mới, sau đó thử Bỏ tệp | Tệp cũ được giữ ở lần đầu; lần sau bỏ tệp nếu vẫn còn nội dung văn bản |
-| TC29 | Đặt hạn gần nhất rồi nộp/nộp lại sau hạn | Server từ chối, bản nộp đã được chấp nhận trước đó vẫn nguyên vẹn |
-| TC30 | Client B xem bài tập đã được Client A nộp | B không thấy nội dung hay tải được tệp bài nộp của A |
-| TC31 | Chọn tệp trên 5 MB hoặc nộp rỗng | Có thông báo lỗi, không tạo hay ghi đè bản nộp |
-| TC32 | Đang nhập bài tập thì giảng viên giao thêm bài mới | Danh sách cập nhật và nội dung đang soạn vẫn được giữ |
-| TC33 | Lưu hai câu trắc nghiệm mức 1 và mức 6 vào cùng môn rồi mở lại ngân hàng | Môn, độ khó, nội dung, bốn lựa chọn và đáp án vẫn được lưu; không có lựa chọn dạng điền đáp án |
-| TC34 | Chọn môn A rồi lọc mức 6 | Chỉ hiển thị câu trắc nghiệm đúng môn và mức; câu môn B không xuất hiện |
-| TC35 | Tạo đề, thêm hai câu rồi đổi bộ lọc và thử thêm lại câu đã chọn | Câu đã thêm vẫn ở danh sách bên phải; không xuất hiện câu trùng |
-| TC36 | Đổi môn khi đang có câu trong đề | Bỏ câu của môn trước và chỉ hiển thị ngân hàng của môn mới |
-| TC37 | Bỏ câu hoặc dùng Lên/Xuống rồi lưu đề, mở cho Client | Đúng số câu và thứ tự; Client thấy tên môn và không nhận đáp án đúng |
-| TC38 | Sửa nội dung, độ khó và đáp án trong ngân hàng sau khi đã lưu đề | Đề cũ và chấm điểm cũ vẫn dùng bản đã chốt; đề tạo mới dùng nội dung vừa sửa |
-| TC39 | Thử nhập độ khó 0/7, môn trùng hoặc trắc nghiệm thiếu lựa chọn/đáp án | Hiện lỗi và không lưu dữ liệu không hợp lệ |
-| TC40 | Nộp đề 1 rồi đăng nhập lại | Trạng thái ONLINE; điểm đề 1 vẫn có trong lịch sử |
-| TC41 | Mở đề 2 sau khi ca đề 1 hết giờ và chấm xong | Trạng thái ONLINE, khi tham gia chuyển DOING_EXAM với tên đề 2; nộp chuyển SUBMITTED |
-| TC42 | Giảng viên gửi cảnh báo cho Client A khi A và B cùng online | Chỉ A hiện đúng nội dung, đáp án đã chọn được giữ và thời gian thi vẫn chạy |
-| TC43 | Giảng viên khóa tài khoản A trong lúc làm bài | A thấy lý do khóa, trở về đăng nhập; B vẫn dùng bình thường; A không đăng nhập lại được |
-| TC44 | Khởi động lại Server rồi thử đăng nhập tài khoản bị khóa | Vẫn bị từ chối; mở khóa trong danh sách tài khoản bị khóa thì đăng nhập lại được |
-| TC45 | Đổi đáp án, khóa tài khoản rồi chờ hết giờ | Server chấm lựa chọn đã nhận trong RAM và lưu điểm; lịch sử không bị xóa |
-| TC46 | Tạo hai tài khoản giáo viên; nhập sai mật khẩu rồi nhập đúng | Sai thì ở màn hình đăng nhập; đúng thì hiện đúng tên tài khoản trên Server |
-| TC47 | Đăng nhập giáo viên đầu tiên sau nâng cấp | Thấy lại môn, câu hỏi, đề, bài tập và kết quả cũ |
-| TC48 | Giáo viên A tạo dữ liệu; đăng xuất, đăng nhập giáo viên B | B chỉ thấy dữ liệu của B; A đăng nhập lại vẫn có dữ liệu của mình |
-| TC49 | Hai giáo viên tạo cùng tên môn | Mỗi tài khoản lưu được một môn riêng; trùng tên trong cùng tài khoản thì bị từ chối |
-| TC50 | Đang thi, cho một Client mất mạng rồi thử đổi giáo viên/dừng Server | Đều bị chặn đến khi ca hết giờ và chấm xong; khởi động lại ứng dụng không bỏ qua điều kiện này |
-| TC51 | Sau khi ca thi hết giờ và chấm xong, đổi giáo viên rồi cho Client kết nối lại | Client thấy đề/bài tập/lịch sử của giáo viên mới, không nhận dữ liệu của giáo viên trước |
-| TC52 | Đổi mật khẩu với mật khẩu cũ sai rồi đúng; đăng nhập lại | Sai thì không đổi; đúng thì mật khẩu mới dùng được và mật khẩu cũ bị từ chối |
+| 01 | Tạo giảng viên, sai/đúng mật khẩu | Sai bị chặn, đúng hiện tên; tài khoản mới trống |
+| 02 | Tạo môn/hai lớp; preview CSV rồi hủy | Chưa ghi hồ sơ/thành viên |
+| 03 | Xác nhận CSV năm cột; nhập cùng sinh viên vào hai lớp | Hồ sơ dùng lại, STT riêng; lớp chính quy khác lớp học phần |
+| 04 | CSV sai ngày/trùng MSV/STT/xung đột | Báo lỗi, không nhập dở dang |
+| 05 | Danh sách cũ thiếu STT, nhập lại CSV gốc | Cập nhật đúng STT theo MSV, không tạo trùng |
+| 06 | Chia 60 sinh viên thành hai ca 30 người | Theo STT gốc; mở lại giữ danh sách |
+| 07 | Tạo/sửa câu; nhập Word nhiều dòng/trùng/lỗi | Đúng A–D/đáp án; sai bị chặn, trùng bỏ qua, hủy không ghi |
+| 08 | Tab Đề thi tạo/tìm/làm mới đề | Đúng tên/câu/thời lượng; không có giao thực hành hoặc mở ca trùng |
+| 09 | Lấy ma trận mức, đổi một câu; thử thiếu ngân hàng | Đủ số lượng, không trùng; lỗi giữ danh sách soạn |
+| 10 | Sửa ngân hàng sau lưu đề | Đề cũ giữ nội dung/đáp án đã chốt |
+| 11 | Chuẩn bị rồi bắt đầu với bốn mã | Chuẩn bị chưa tính giờ; bắt đầu mới có deadline chung |
+| 12 | A đúng ca, B khác ca | A có offer, B không nhận/không vào bằng ID của A |
+| 13 | Đợi 30 giây sau mở mới tham gia | Chỉ còn thời gian theo deadline chung |
+| 14 | Chọn đáp án, đợi lưu, mất mạng rồi vào lại | Cùng mã/bố cục/đáp án đã lưu/deadline |
+| 15 | A đã vào, B cùng ca chưa vào; khởi động lại Server khi còn hạn | Đúng giảng viên, khởi động TCP: A tiếp tục, B nhận đề, không tạo lượt mới |
+| 16 | A nộp sớm, B offline đến hết hạn | Server chấm/lưu cả hai theo đáp án hợp lệ đã nhận |
+| 17 | Nộp hai lần, đăng nhập lại sau nộp | Một kết quả; không sửa bài đã nộp |
+| 18 | Đáp án trước hạn chờ slot/DB; đáp án khác sau hạn | Xét đúng thời điểm nhận Server; test tự động kiểm tra hàng đợi |
+| 19 | Đã nộp rồi thoát/vào lại; xem ca/lớp khác | Online/Offline thay đổi, tiến độ theo đúng lượt, không lẫn |
+| 20 | Người chưa từng vào đến hết hạn | Vắng thi; không tự tạo điểm 0 |
+| 21 | Cảnh báo/khóa riêng A, mở khóa | B không bị ảnh hưởng; khóa giữ bền, bài đã nhận vẫn chấm |
+| 22 | Cùng MSV đăng nhập ở máy khác | Phiên mới thay phiên cũ; không lẫn đáp án sinh viên khác |
+| 23 | Dừng/X/Đổi giảng viên trước hạn | Chặn đến hết hạn và chấm xong, kể cả nộp hết sớm |
+| 24 | Mở ca tiếp theo, xem/lọc/xuất điểm | Giữ ca cũ, đúng bộ lọc/tiếng Việt/mã/điểm/giờ nộp |
+| 25 | Đổi giảng viên sau khi đủ điều kiện | Đóng phiên cũ, dữ liệu chủ sở hữu tách riêng |
+| 26 | Client không đọc/frame quá lớn; 80 socket đồng thời | Timeout/giới hạn riêng; các kết nối còn lại hoạt động (test loopback/H2) |
 
-## Gợi ý demo nhanh
+## Chạy tự động
 
-Để demo hết giờ nhanh, dùng **Tạo đề thi** trên Server và đặt thời lượng 2 phút, chọn đề trong **Chọn bài thi để mở**, rồi cho Client bấm **Tham gia bài thi**. Đề demo mặc định có thời lượng 20 phút.
+```powershell
+mvn test
+mvn "-Dlanexam.uiTests=true" test
+```
 
-## Các ca bổ sung cho giờ chung và đóng cửa sổ
-
-- Mở đề 2 phút, sau 30 giây mới tham gia: chỉ còn khoảng 90 giây, không được đủ 2 phút.
-- Học viên A chọn đáp án rồi mất mạng; vào lại A hoặc đổi sang B trên cùng Client: mọi câu đều trống, hạn chung không đổi.
-- Bấm X Server khi một lượt còn hạn và offline: hiện lý do, giữ cửa sổ và kết nối Server. Chỉ khi ca hết giờ và chấm xong mới đóng được, kể cả mọi người đã nộp sớm.
-- Học viên chưa tham gia đến sau hạn: không được vào bài cũ.
-- Dùng Client EXE mới; bản cũ gửi SAVE_DRAFT bị yêu cầu cập nhật.
-
-- Gửi đáp án đúng trước hạn nhưng giữ slot xử lý đến sau hạn: không chấm sớm; thả slot thì phải tính đáp án đúng, nhận sau hạn thì bỏ qua.
-- Mở đề khi chưa ai tham gia hoặc mọi người đã nộp sớm: Dừng/X/Đổi giáo viên vẫn bị chặn đến hết ca. Mở lại cùng đề giữ nguyên hạn; đề khác bị từ chối.
-- Ép mở đề và dừng đồng thời: mở trước thì dừng bị chặn; dừng trước thì không tạo đợt mới trong MySQL.
-- Để Client trên trang chờ: số giây giảm dần, hết giờ nút bị khóa và không gửi JOIN_EXAM.
-- Một Client không nhận dữ liệu: Client khác vẫn nhận điểm; sau 10 giây bị kẹt ghi thì chỉ kết nối chậm bị ngắt.
-
-- Gửi liên tiếp hai lựa chọn trước hạn trong lúc toàn bộ slot xử lý bị giữ, sau đó ngắt Client: luồng đọc vẫn nhận đủ hai thông điệp, Server chấm lựa chọn cuối sau khi thả slot, không bỏ thông điệp đã nhận khi EOF.
+ExamWorkflowUiTest kiểm tra giao diện/luồng hiện tại. LegacyDataCompatibilityTest bảo toàn mapping lịch sử. Không có bài tập/gửi tệp thực hành trong bản hiện hành. Ghi riêng số máy, IP/cổng và kết quả thử LAN/MySQL thật; test 80 socket một máy không thay thế thử 80 máy.

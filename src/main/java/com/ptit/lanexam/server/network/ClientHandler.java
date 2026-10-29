@@ -7,7 +7,6 @@ import com.ptit.lanexam.common.TransferLimits;
 import com.ptit.lanexam.common.dto.*;
 import com.ptit.lanexam.server.entity.Student;
 import com.ptit.lanexam.server.service.AuthService;
-import com.ptit.lanexam.server.service.AssignmentService;
 import com.ptit.lanexam.server.service.ExamService;
 
 import java.io.*;
@@ -18,7 +17,6 @@ import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -30,7 +28,6 @@ public class ClientHandler implements Runnable {
     private final SessionRegistry registry;
     private final AuthService authService;
     private final ExamService examService;
-    private final AssignmentService assignmentService;
     private final Supplier<Long> publishedExamId;
     private final ReadWriteLock attemptGate;
     private final BooleanSupplier acceptsAttempts;
@@ -48,30 +45,12 @@ public class ClientHandler implements Runnable {
     private volatile Thread processor;
 
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
-                         Supplier<Long> publishedExamId) {
-        this(socket, registry, authService, examService, new AssignmentService(), publishedExamId);
-    }
-
-    public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
-                         AssignmentService assignmentService, Supplier<Long> publishedExamId) {
-        this(socket, registry, authService, examService, assignmentService, publishedExamId, new ReentrantReadWriteLock(), () -> true);
-    }
-
-    public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
-                         AssignmentService assignmentService, Supplier<Long> publishedExamId,
-                         ReadWriteLock attemptGate, BooleanSupplier acceptsAttempts) {
-        this(socket, registry, authService, examService, assignmentService, publishedExamId,
-                attemptGate, acceptsAttempts, new Semaphore(1));
-    }
-
-    public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
-                         AssignmentService assignmentService, Supplier<Long> publishedExamId,
-                         ReadWriteLock attemptGate, BooleanSupplier acceptsAttempts, Semaphore requestSlots) {
+                         Supplier<Long> publishedExamId, ReadWriteLock attemptGate,
+                         BooleanSupplier acceptsAttempts, Semaphore requestSlots) {
         this.socket = socket;
         this.registry = registry;
         this.authService = authService;
         this.examService = examService;
-        this.assignmentService = assignmentService;
         this.publishedExamId = publishedExamId;
         this.attemptGate = attemptGate;
         this.acceptsAttempts = acceptsAttempts;
@@ -158,30 +137,14 @@ public class ClientHandler implements Runnable {
                 case SAVE_DRAFT -> sendError("Client cũ không còn được hỗ trợ. Hãy dùng LANExamClient.exe phiên bản mới.");
                 case ANSWER_UPDATE -> requireLogin(() -> examService.updateAnswers(studentCode,
                         JsonUtil.payload(message, SubmitExamRequest.class), receivedAt));
-                case ASSIGNMENTS_REQUEST -> requireLogin(this::sendAssignments);
-                case ASSIGNMENT_SUBMIT -> requireLogin(() -> {
-                    var result = assignmentService.submit(studentCode,
-                            JsonUtil.payload(message, AssignmentMessages.SubmitRequest.class), receivedAt);
-                    send(JsonUtil.message(MessageType.ASSIGNMENT_SUBMITTED, result));
-                    sendAssignments();
-                });
-                case ASSIGNMENT_FILE_REQUEST -> requireLogin(() -> send(JsonUtil.message(MessageType.ASSIGNMENT_FILE_RESULT,
-                        assignmentService.downloadForStudent(studentCode,
-                                JsonUtil.payload(message, AssignmentMessages.FileRequest.class)))));
                 case PING -> requireLogin(() -> send(JsonUtil.message(MessageType.PONG, null)));
                 default -> sendError("Message không được hỗ trợ: " + message.getType());
             }
         } catch (Exception e) {
-            MessageType errorType = message.getType() != null && message.getType().name().startsWith("ASSIGNMENT")
-                    ? MessageType.ASSIGNMENT_ERROR : MessageType.ERROR;
-            send(JsonUtil.message(errorType, e.getMessage() == null ? "Có lỗi xử lý yêu cầu" : e.getMessage()));
+            send(JsonUtil.message(MessageType.ERROR, e.getMessage() == null ? "Có lỗi xử lý yêu cầu" : e.getMessage()));
         }
     }
 
-    private void sendAssignments() {
-        send(JsonUtil.message(MessageType.ASSIGNMENTS_RESULT,
-                new AssignmentMessages.ListResult(assignmentService.listForStudent(studentCode))));
-    }
 
     private void handleLogin(LoginRequest request) {
         if (!acceptsAttempts.getAsBoolean()) { sendError("Server đã dừng."); closeQuietly(); return; }
@@ -215,7 +178,6 @@ public class ClientHandler implements Runnable {
         // Login describes this connection; past submissions belong in history.
         sendHistory();
         sendAvailability();
-        sendAssignments();
     }
 
     private void handleJoin(JoinExamRequest request) {

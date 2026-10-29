@@ -1,38 +1,34 @@
 package com.ptit.lanexam.server;
 
-import com.ptit.lanexam.common.dto.ExamDto;
 import com.ptit.lanexam.server.network.*;
 import com.ptit.lanexam.server.persistence.JpaUtil;
 import com.ptit.lanexam.server.service.AuthService;
-import com.ptit.lanexam.server.service.AssignmentService;
 import com.ptit.lanexam.server.service.ExamService;
-import com.ptit.lanexam.server.service.ExamResultRow;
-import com.ptit.lanexam.server.service.ExamSummary;
-import com.ptit.lanexam.server.service.SeedData;
 import com.ptit.lanexam.server.service.QuestionBankService;
 import com.ptit.lanexam.server.service.TeacherAccountService;
 import com.ptit.lanexam.server.service.TeacherIdentity;
-import com.ptit.lanexam.common.ui.AssignmentUi;
+import com.ptit.lanexam.server.service.ClassService;
+import com.ptit.lanexam.server.service.ExamShiftService;
+import com.ptit.lanexam.common.ui.UiSupport;
+import com.ptit.lanexam.common.ui.AppUi;
 import jakarta.persistence.EntityManager;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
-import javafx.scene.Scene;
+import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.layout.StackPane;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.stage.Stage;
 import javafx.stage.Window;
-import java.time.Clock;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.Locale;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.Supplier;
 
 public class ServerApp extends Application {
@@ -41,6 +37,7 @@ public class ServerApp extends Application {
     private final Supplier<EntityManager> entityManagers;
     private final Runnable initializeDatabase;
     private final boolean ownsJpa;
+    private final int requestedPort;
     private final TeacherAccountService teacherAccounts;
     private TeacherIdentity teacher;
     private TeacherLoginPane teacherLogin;
@@ -49,33 +46,49 @@ public class ServerApp extends Application {
 
     private ExamServer server;
     private ExamService examService;
-    private AssignmentService assignmentService;
+    private ClassService classService;
+    private ClassManager classManager;
+    private ExamOrganizer organizer;
+    private ExamResultsPane examResults;
     private QuestionBankService questionBankService;
     private AuthService authService;
-    private StudentSessionTable studentTable;
     private Label statusLabel;
     private Label addressLabel;
     private Button startButton;
     private Button stopButton;
-    private Button publishButton;
-    private Button createButton;
     private Button resultsButton;
-    private Button assignmentsButton;
     private Button questionBankButton;
     private Button lockedAccountsButton;
     private Stage mainStage;
     private boolean closePending;
+    private BorderPane pageHost;
+    private final Map<String, Node> pages = new LinkedHashMap<>();
+    private final Map<String, Button> navigation = new LinkedHashMap<>();
+    private QuestionBankBrowser bankBrowser;
+    private ExamTemplateManager templateManager;
+    private Label connectionState;
 
     public ServerApp() {
-        this(JpaUtil::em, () -> { JpaUtil.init(); SeedData.ensureSeeded(); }, true);
+        this(JpaUtil::em, () -> {
+            JpaUtil.init();
+        }, true);
     }
     public ServerApp(Supplier<EntityManager> managers, Runnable initializeDatabase) {
         this(managers, initializeDatabase, false);
     }
+    public ServerApp(Supplier<EntityManager> managers, Runnable initializeDatabase, int port) {
+        this(managers, initializeDatabase, false, port);
+    }
     private ServerApp(Supplier<EntityManager> managers, Runnable initializeDatabase, boolean ownsJpa) {
+        this(managers, initializeDatabase, ownsJpa, 5000);
+    }
+    private ServerApp(Supplier<EntityManager> managers, Runnable initializeDatabase, boolean ownsJpa, int port) {
         entityManagers = managers; this.initializeDatabase = initializeDatabase; this.ownsJpa = ownsJpa;
+        requestedPort = port;
         teacherAccounts = new TeacherAccountService(managers);
     }
+
+    public int getListeningPort() { return server == null ? -1 : server.getPort(); }
 
     @Override
     public void start(Stage stage) {
@@ -97,22 +110,24 @@ public class ServerApp extends Application {
 
     private void loadDatabase() {
         long version = workspaceVersion;
-        mainStage.setScene(new Scene(new StackPane(new Label("Đang kết nối database...")), 660, 560));
-        AssignmentUi.async("teacher-database-startup", () -> { initializeDatabase.run(); return true; }, ready -> {
+        mainStage.setScene(AppUi.scene(new StackPane(new Label("Đang kết nối dữ liệu...")), 660, 560));
+        UiSupport.async("teacher-database-startup", () -> { initializeDatabase.run(); return true; }, ready -> {
             if (version == workspaceVersion) showTeacherLogin();
         }, ex -> {
             if (version != workspaceVersion) return;
             Label error = new Label("Không kết nối được database: " + ex.getMessage()); error.setWrapText(true);
             Button retry = new Button("Thử lại"); retry.setOnAction(event -> loadDatabase());
             VBox content = new VBox(16, error, retry); content.setPadding(new Insets(28));
-            mainStage.setScene(new Scene(content, 660, 560));
+            mainStage.setScene(AppUi.scene(content, 660, 560));
         });
     }
 
     private void showTeacherLogin() {
         teacherLogin = new TeacherLoginPane(teacherAccounts, this::enterWorkspace);
         StackPane root = new StackPane(teacherLogin); root.setId("teacher-login-root");
-        mainStage.setScene(new Scene(root, 660, 560));
+        mainStage.setScene(AppUi.scene(root, 660, 600));
+        mainStage.setMinWidth(620);
+        mainStage.setMinHeight(520);
         mainStage.setTitle("LAN Exam Server - Đăng nhập giáo viên");
         mainStage.sizeToScene();
     }
@@ -122,109 +137,169 @@ public class ServerApp extends Application {
         teacher = identity; workspaceVersion++;
         examService = new ExamService(entityManagers, identity.id());
         questionBankService = new QuestionBankService(entityManagers, identity.id());
-        assignmentService = new AssignmentService(entityManagers, Clock.systemUTC(), identity.id());
+        classService = new ClassService(entityManagers, identity.id());
         authService = new AuthService(entityManagers);
         showWorkspace();
     }
 
     private void showWorkspace() {
-        Stage stage = mainStage;
-
-        Label title = new Label("LAN Exam Server - Giảng viên");
-        title.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
-        statusLabel = new Label("Server chưa chạy");
+        pages.clear();
+        navigation.clear();
+        statusLabel = new Label("Khởi động Server để sinh viên kết nối vào phòng học.");
         statusLabel.setWrapText(true);
-        addressLabel = new Label("IP Server sẽ hiển thị khi khởi động Server.");
+        addressLabel = new Label("Địa chỉ kết nối sẽ hiển thị khi Server sẵn sàng.");
         addressLabel.setId("server-address");
         addressLabel.setWrapText(true);
-        Label teacherLabel = new Label("Giáo viên: " + teacher.fullName() + " (" + teacher.username() + ")");
-        teacherLabel.setId("active-teacher"); teacherLabel.setStyle("-fx-font-weight: bold;");
+        connectionState = AppUi.label("Chưa kết nối", "badge");
+        Label teacherLabel = new Label(teacher.fullName() + " (" + teacher.username() + ")");
+        teacherLabel.setId("active-teacher");
         teacherLabel.setWrapText(true);
-        logoutButton = new Button("Đăng xuất / Đổi giáo viên");
+        logoutButton = new Button("Đăng xuất");
         logoutButton.setId("teacher-logout"); logoutButton.setOnAction(event -> logoutTeacher());
         Button passwordButton = new Button("Đổi mật khẩu"); passwordButton.setOnAction(event -> changeTeacherPassword());
-
-        studentTable = new StudentSessionTable(rows, this::warnStudent, this::lockStudent);
+        passwordButton.getStyleClass().add("small");
+        logoutButton.getStyleClass().add("small");
 
         startButton = new Button("Khởi động Server");
         startButton.setId("server-start");
+        startButton.getStyleClass().add("primary");
         stopButton = new Button("Dừng Server");
-        publishButton = new Button("Chọn bài thi để mở");
-        createButton = new Button("Tạo đề thi");
-        resultsButton = new Button("Xem điểm");
-        assignmentsButton = new Button("Bài tập / Bài nộp");
-        questionBankButton = new Button("Ngân hàng câu hỏi");
-        lockedAccountsButton = new Button("Tài khoản bị khóa / Mở khóa");
+        stopButton.setId("server-stop");
+        stopButton.getStyleClass().add("danger");
+
+        resultsButton = navButton("results", "Kết quả");
+        questionBankButton = navButton("bank", "Ngân hàng câu hỏi");
+        lockedAccountsButton = new Button("Mở khóa SV");
+        lockedAccountsButton.setOnAction(e -> LockedAccountManager.show(mainStage, authService));
         lockedAccountsButton.setId("manage-locked-accounts");
-        lockedAccountsButton.setStyle("-fx-font-weight: bold;");
-        lockedAccountsButton.setDisable(true);
         stopButton.setDisable(true);
-        publishButton.setDisable(true);
-        createButton.setDisable(true);
-        resultsButton.setDisable(true);
-        assignmentsButton.setDisable(true);
-        questionBankButton.setDisable(true);
 
         startButton.setOnAction(e -> startServer());
         stopButton.setOnAction(e -> stopServer());
-        publishButton.setOnAction(e -> publishExam());
-        createButton.setOnAction(e -> createExam());
-        questionBankButton.setOnAction(e -> QuestionBankManager.show(mainStage, questionBankService));
-        lockedAccountsButton.setOnAction(e -> LockedAccountManager.show(mainStage, authService));
-        resultsButton.setOnAction(e -> showResults());
-        assignmentsButton.setOnAction(e -> {
-            ExamServer activeServer = server;
-            new AssignmentManager(mainStage, assignmentService, activeServer::notifyAssignmentsChanged);
-        });
 
-        FlowPane actions = new FlowPane(10, 10, startButton, stopButton, lockedAccountsButton,
-                createButton, publishButton, questionBankButton, resultsButton, assignmentsButton);
-        VBox header = new VBox(10, title, new FlowPane(12, 8, teacherLabel, passwordButton, logoutButton), statusLabel, addressLabel, actions);
-        header.setPadding(new Insets(16));
+        Button room = navButton("room", "Tổ chức thi");
+        Button classes = navButton("classes", "Lớp & sinh viên");
+        Region sidebarSpace = new Region();
+        VBox.setVgrow(sidebarSpace, Priority.ALWAYS);
+        VBox sidebar = new VBox(7, AppUi.label("LAN Exam", "brand"),
+                AppUi.label("Không gian giảng viên", "brand-caption"), classes, questionBankButton, room,
+                resultsButton, sidebarSpace,
+                AppUi.label("Thi trắc nghiệm\ntrong mạng nội bộ", "sidebar-note"));
+        sidebar.setPrefWidth(220);
+        sidebar.setMinWidth(220);
+        sidebar.getStyleClass().add("sidebar");
 
-        BorderPane root = new BorderPane();
-        root.setTop(header);
-        VBox students = new VBox(8, studentTable,
-                new Label("ONLINE: đã đăng nhập • DOING_EXAM: đang làm đề • SUBMITTED: đã nộp đề trong phiên này"));
-        VBox.setVgrow(studentTable, javafx.scene.layout.Priority.ALWAYS);
-        students.setPadding(new Insets(0, 16, 0, 16));
-        root.setCenter(students);
+        HBox topbar = AppUi.toolbar(connectionState, AppUi.spacer(), teacherLabel, lockedAccountsButton, passwordButton, logoutButton);
+        topbar.getStyleClass().add("topbar");
+        pageHost = new BorderPane();
+        BorderPane workspace = new BorderPane(pageHost);
+        HBox controls = AppUi.toolbar(startButton, stopButton, addressLabel); controls.getStyleClass().add("connection-controls");
+        VBox connection = new VBox(0, topbar, controls);
+        connection.getStyleClass().add("connection-header"); workspace.setTop(connection);
+        HBox footer = AppUi.toolbar(statusLabel);
+        footer.getStyleClass().add("status-bar");
+        workspace.setBottom(footer);
+        BorderPane root = new BorderPane(workspace);
+        root.setLeft(sidebar);
 
-        stage.setScene(new Scene(root, 1180, 640));
-        stage.setTitle("LAN Exam Server - " + teacher.fullName());
-        stage.sizeToScene();
-        stage.show();
+        pages.put("room", roomPage());
+        showPage("classes");
+        mainStage.setScene(AppUi.scene(root, 1280, 780));
+        mainStage.setMinWidth(1080);
+        mainStage.setMinHeight(680);
+        mainStage.setTitle("LAN Exam — " + teacher.fullName());
+        mainStage.sizeToScene();
+        mainStage.show();
     }
 
+    private Button navButton(String key, String text) {
+        Button button = new Button(text);
+        button.setId("nav-" + key);
+        button.setMaxWidth(Double.MAX_VALUE);
+        button.getStyleClass().add("nav-button");
+        button.setOnAction(event -> showPage(key));
+        navigation.put(key, button);
+        return button;
+    }
+
+    private void showPage(String key) {
+        Node selected = pages.get(key);
+        if (selected == null) {
+            selected = switch (key) {
+                case "bank" -> {
+                    bankBrowser = new QuestionBankBrowser(questionBankService);
+                    yield page("Ngân hàng câu hỏi", "Soạn câu hỏi theo môn để dùng chung cho các đề thi.", bankBrowser);
+                }
+                case "results" -> {
+                    examResults = new ExamResultsPane(mainStage, examService, classService);
+                    yield page("Kết quả", "Lọc theo lớp, ca thi và xuất bảng điểm CSV.", examResults);
+                }
+                case "classes" -> {
+                    classManager = new ClassManager(mainStage, classService, questionBankService, rows, () -> {
+                        if (server != null && server.isRunning()) server.refreshEligibility();
+                        if (organizer != null) organizer.reload();
+                    });
+                    yield page("Lớp & sinh viên", "Tạo danh sách thi và nhập CSV. Một sinh viên có thể thuộc nhiều lớp.", classManager);
+                }
+                default -> pages.get("room");
+            };
+            pages.put(key, selected);
+        }
+        pageHost.setCenter(selected);
+        if (key.equals("results") && examResults != null) examResults.reload();
+        if (key.equals("room") && organizer != null) organizer.serverStateChanged();
+        navigation.forEach((name, button) -> {
+            button.getStyleClass().remove("active");
+            if (name.equals(key)) button.getStyleClass().add("active");
+        });
+    }
+    private VBox page(String title, String description, Node content) {
+        VBox result = new VBox(18, AppUi.heading(title, description), content);
+        result.getStyleClass().add("page");
+        VBox.setVgrow(content, Priority.ALWAYS);
+        return result;
+    }
+
+    private VBox roomPage() {
+        organizer = new ExamOrganizer(classService, examService, new ExamShiftService(entityManagers, teacher.id()), () -> server, rows, this::warnStudent, this::lockStudent,
+                message -> statusLabel.setText(message));
+        templateManager = new ExamTemplateManager(mainStage, examService, questionBankService,
+                message -> { statusLabel.setText(message); organizer.reload(); });
+        Tab sessions = new Tab("Ca thi", organizer); sessions.setId("organizer-session-tab");
+        Tab templates = new Tab("Đề thi", templateManager); templates.setId("organizer-templates-tab");
+        TabPane tabs = new TabPane(sessions, templates); tabs.setId("exam-organizer-tabs");
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.getSelectionModel().selectedItemProperty().addListener((o, old, next) -> { if (next == sessions) organizer.serverStateChanged(); });
+        return page("Tổ chức thi", "Chuẩn bị danh sách và đề trước; bấm Bắt đầu thi khi phòng máy sẵn sàng.", tabs);
+    }
     private void startServer() {
         long version = workspaceVersion;
         ExamService currentExams = examService;
-        AssignmentService currentAssignments = assignmentService;
         AuthService currentAuth = authService;
         startButton.setDisable(true);
         logoutButton.setDisable(true);
         statusLabel.setText("Đang khởi động database và server...");
+        connectionState.setText("Đang kết nối...");
 
         Thread thread = new Thread(() -> {
             try {
                 if (version != workspaceVersion) return;
-                ExamServer candidate = new ExamServer(registry, currentAuth, currentExams, currentAssignments);
+                ExamServer candidate = new ExamServer(registry, currentAuth, currentExams);
                 server = candidate;
-                candidate.start(5000);
+                candidate.start(requestedPort);
                 if (version != workspaceVersion) { candidate.stop(); return; }
                 String connectionInfo = ServerAddress.connectionInfo(candidate.getPort());
                 Platform.runLater(() -> {
                     if (version != workspaceVersion) return;
                     logoutButton.setDisable(false);
-                    statusLabel.setText("Server đang chạy tại cổng 5000");
+                    statusLabel.setText("Server đang chạy tại cổng " + candidate.getPort());
+                    connectionState.setText("Server đang chạy • " + candidate.getPort());
                     addressLabel.setText(connectionInfo);
                     stopButton.setDisable(false);
-                    publishButton.setDisable(false);
-                    createButton.setDisable(false);
                     resultsButton.setDisable(false);
-                    assignmentsButton.setDisable(false);
                     questionBankButton.setDisable(false);
                     lockedAccountsButton.setDisable(false);
+                    if (organizer != null) organizer.serverStateChanged();
                 });
             } catch (Exception ex) {
                 Platform.runLater(() -> {
@@ -232,168 +307,11 @@ public class ServerApp extends Application {
                     logoutButton.setDisable(false);
                     startButton.setDisable(false);
                     statusLabel.setText("Khởi động thất bại");
+                    connectionState.setText("Chưa kết nối");
                     showError("Không thể khởi động Server", ex.getMessage());
                 });
             }
         }, "server-startup");
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private void publishExam() {
-        long version = workspaceVersion;
-        ExamService currentExams = examService;
-        publishButton.setDisable(true);
-        createButton.setDisable(true);
-        ExamServer activeServer = server;
-        Thread loader = new Thread(() -> {
-            try {
-                List<ExamSummary> exams = currentExams.listExams();
-                Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
-                    if (!activeServer.isRunning()) return;
-                    try {
-                        var selected = ExamSelectionDialog.show(mainStage, exams);
-                        if (selected.isEmpty()) { finishPublishAction(activeServer); return; }
-                        activateAndPublish(activeServer, selected.get().id());
-                    } catch (Exception ex) {
-                        finishPublishAction(activeServer);
-                        showError("Không thể chọn bài thi", ex.getMessage());
-                    }
-                });
-            } catch (Exception e) {
-                Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
-                    finishPublishAction(activeServer);
-                    showError("Không thể tải danh sách bài thi", e.getMessage());
-                });
-            }
-        }, "load-exams");
-        loader.setDaemon(true);
-        loader.start();
-    }
-
-    private void activateAndPublish(ExamServer activeServer, Long examId) {
-        long version = workspaceVersion;
-        ExamService currentExams = examService;
-        Thread thread = new Thread(() -> {
-            try {
-                ExamServer.Publication publication = activeServer.openExam(examId);
-                ExamDto exam = publication.exam();
-                int count = publication.notifiedStudents();
-                Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
-                    statusLabel.setText("Đã mở đợt #" + exam.getId() + ": " + exam.getTitle()
-                            + "; đã thông báo cho " + count + " sinh viên online");
-                    finishPublishAction(activeServer);
-                });
-            } catch (Exception ex) {
-                Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
-                    finishPublishAction(activeServer);
-                    showError("Không thể mở bài thi", ex.getMessage());
-                });
-            }
-        }, "publish-exam");
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    private void finishPublishAction(ExamServer activeServer) {
-        if (activeServer.isRunning()) {
-            publishButton.setDisable(false);
-            createButton.setDisable(false);
-        }
-    }
-
-    private void createExam() {
-        long version = workspaceVersion;
-        ExamService currentExams = examService;
-        ExamEditorDialog.show(mainStage, questionBankService).ifPresent(draft -> {
-            createButton.setDisable(true);
-            publishButton.setDisable(true);
-            Thread thread = new Thread(() -> {
-                try {
-                    ExamSummary created = currentExams.createExamFromBank(draft);
-                    Platform.runLater(() -> {
-                        if (version != workspaceVersion) return;
-                        statusLabel.setText("Đã lưu đề: " + created.title() + ". Bài đang mở vẫn tiếp tục; chọn đề khi muốn mở bài mới.");
-                        if (server != null && server.isRunning()) {
-                            createButton.setDisable(false);
-                            publishButton.setDisable(false);
-                        }
-                    });
-                } catch (Exception ex) {
-                    Platform.runLater(() -> {
-                        if (version != workspaceVersion) return;
-                        if (server != null && server.isRunning()) {
-                            createButton.setDisable(false);
-                            publishButton.setDisable(false);
-                        }
-                        showError("Không thể tạo đề thi", ex.getMessage());
-                    });
-                }
-            }, "create-exam");
-            thread.setDaemon(true);
-            thread.start();
-        });
-    }
-
-    private void showResults() {
-        Stage window = new Stage();
-        window.initOwner(mainStage);
-        window.setTitle("Bảng điểm sinh viên");
-        TableView<ExamResultRow> table = new TableView<>();
-        table.getColumns().add(resultColumn("Mã lượt", 80, row -> Long.toString(row.roundId())));
-        table.getColumns().add(resultColumn("Mã sinh viên", 130, row -> row.studentCode()));
-        table.getColumns().add(resultColumn("Họ tên", 160, row -> row.fullName()));
-        table.getColumns().add(resultColumn("Đề thi", 190, row -> row.examTitle()));
-        table.getColumns().add(resultColumn("Điểm", 75, row -> String.format(Locale.ROOT, "%.2f", row.score())));
-        table.getColumns().add(resultColumn("Số câu đúng", 100, row -> row.correct() + "/" + row.total()));
-        DateTimeFormatter timeFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
-        table.getColumns().add(resultColumn("Thời gian nộp", 160, row -> row.submittedAt().format(timeFormat)));
-        table.setPlaceholder(new Label("Chưa có bài nộp"));
-        Label count = new Label("Đang tải kết quả...");
-        Button refresh = new Button("Làm mới");
-        refresh.setOnAction(e -> loadResults(table, count, refresh));
-        VBox root = new VBox(10, table, new HBox(10, refresh, count));
-        root.setPadding(new Insets(14));
-        VBox.setVgrow(table, javafx.scene.layout.Priority.ALWAYS);
-        window.setScene(new Scene(root, 950, 520));
-        window.show();
-        loadResults(table, count, refresh);
-    }
-
-    private TableColumn<ExamResultRow, String> resultColumn(String title, int width,
-            java.util.function.Function<ExamResultRow, String> value) {
-        TableColumn<ExamResultRow, String> column = new TableColumn<>(title);
-        column.setPrefWidth(width);
-        column.setCellValueFactory(cell -> new SimpleStringProperty(value.apply(cell.getValue())));
-        return column;
-    }
-
-    private void loadResults(TableView<ExamResultRow> table, Label count, Button refresh) {
-        long version = workspaceVersion;
-        ExamService currentExams = examService;
-        refresh.setDisable(true);
-        Thread thread = new Thread(() -> {
-            try {
-                List<ExamResultRow> results = currentExams.listResults();
-                Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
-                    table.getItems().setAll(results);
-                    count.setText("Tổng số bài đã nộp: " + results.size());
-                    refresh.setDisable(false);
-                });
-            } catch (Exception ex) {
-                Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
-                    refresh.setDisable(false);
-                    count.setText("Không tải được bảng điểm");
-                    showError("Không thể xem điểm", ex.getMessage());
-                });
-            }
-        }, "load-results");
         thread.setDaemon(true);
         thread.start();
     }
@@ -411,27 +329,28 @@ public class ServerApp extends Application {
         ExamServer activeServer = server;
         if (activeServer == null || !activeServer.isRunning()) return;
         TextInputDialog dialog = new TextInputDialog(lock ? "Vi phạm quy chế thi" : "Bạn đang vi phạm quy chế thi. Vui lòng dừng hành vi vi phạm.");
+        AppUi.style(dialog.getDialogPane());
         dialog.initOwner(mainStage);
         dialog.setTitle(lock ? "Khóa tài khoản" : "Cảnh báo vi phạm");
         dialog.setHeaderText((lock ? "Khóa " : "Cảnh báo ") + student.studentCode() + " — " + student.fullName());
         dialog.setContentText(lock ? "Lý do khóa (tối đa 500 ký tự):" : "Nội dung gửi đến Client (tối đa 1.000 ký tự):");
-        if (lock) dialog.getEditor().setTooltip(new Tooltip("Ngắt kết nối và chặn đăng nhập đến khi mở khóa. Hết giờ chấm các lựa chọn Server đã nhận; vào lại làm bài trống."));
+        if (lock) dialog.getEditor().setTooltip(new Tooltip("Ngắt kết nối và chặn đăng nhập đến khi mở khóa. Đáp án đã nhận vẫn được lưu và chấm theo hạn thi."));
         ((Button) dialog.getDialogPane().lookupButton(ButtonType.OK)).setText(lock ? "Khóa tài khoản" : "Gửi cảnh báo");
         dialog.showAndWait().ifPresent(reason -> {
-            studentTable.setDisable(true);
-            com.ptit.lanexam.common.ui.AssignmentUi.async("student-moderation", () -> {
+            organizer.setDisable(true);
+            com.ptit.lanexam.common.ui.UiSupport.async("student-moderation", () -> {
                 if (lock) activeServer.lockAccount(student.studentCode(), reason);
                 else activeServer.warnViolation(student.studentCode(), reason);
                 return student.studentCode();
             }, code -> {
                 if (version != workspaceVersion) return;
-                studentTable.setDisable(false);
+                organizer.setDisable(false);
                 statusLabel.setText(lock ? "Đã khóa tài khoản " + code
-                        + ". Bấm Tài khoản bị khóa / Mở khóa ở phía trên để mở lại."
+                        + ". Có thể mở lại trong mục Tài khoản bị khóa."
                         : "Đã gửi cảnh báo đến " + code);
             }, ex -> {
                 if (version != workspaceVersion) return;
-                studentTable.setDisable(false);
+                organizer.setDisable(false);
                 showError("Không thể " + (lock ? "khóa tài khoản" : "gửi cảnh báo"), ex.getMessage());
             });
         });
@@ -448,7 +367,7 @@ public class ServerApp extends Application {
         workspace.setDisable(true);
         ExamServer currentServer = server;
         ExamService currentExams = examService;
-        AssignmentUi.async("server-window-close", () -> {
+        UiSupport.async("server-window-close", () -> {
             if (currentServer != null && currentServer.isRunning()) currentServer.stopIfIdle();
             else currentExams.ensureCanStop();
             return true;
@@ -471,7 +390,7 @@ public class ServerApp extends Application {
         javafx.scene.Parent workspace = mainStage.getScene().getRoot();
         workspace.setDisable(true);
         logoutButton.setDisable(true); stopButton.setDisable(true); startButton.setDisable(true);
-        AssignmentUi.async("teacher-session-change", () -> {
+        UiSupport.async("teacher-session-change", () -> {
             if (currentServer != null && currentServer.isRunning()) currentServer.stopIfIdle();
             else currentExams.ensureCanStop();
             return true;
@@ -481,6 +400,7 @@ public class ServerApp extends Application {
             markServerStopped(); server = null;
             if (logout) {
                 workspaceVersion++;
+                disposePages();
                 Window.getWindows().stream().filter(window -> window instanceof Stage child && child != mainStage && child.getOwner() == mainStage)
                         .map(window -> (Stage) window).toList().forEach(Stage::close);
                 teacher = null; rows.clear(); showTeacherLogin();
@@ -498,29 +418,36 @@ public class ServerApp extends Application {
     private void changeTeacherPassword() {
         long version = workspaceVersion;
         Long teacherId = teacher.id();
-        TeacherAccountDialogs.changePassword(mainStage).ifPresent(input -> AssignmentUi.async("change-teacher-password", () -> {
+        TeacherAccountDialogs.changePassword(mainStage).ifPresent(input -> UiSupport.async("change-teacher-password", () -> {
             teacherAccounts.changePassword(teacherId, input.currentPassword(), input.newPassword()); return true;
         }, done -> { if (version == workspaceVersion) statusLabel.setText("Đã đổi mật khẩu giáo viên."); },
                 ex -> { if (version == workspaceVersion) showError("Không đổi được mật khẩu", ex.getMessage()); }));
     }
 
     private void markServerStopped() {
+        showPage("room");
+        if (organizer != null) organizer.serverStateChanged();
         rows.clear();
         logoutButton.setDisable(false);
         statusLabel.setText("Server đã dừng");
+        connectionState.setText("Chưa kết nối");
         addressLabel.setText("IP Server sẽ hiển thị khi khởi động Server.");
         startButton.setDisable(false);
         stopButton.setDisable(true);
-        publishButton.setDisable(true);
-        createButton.setDisable(true);
-        resultsButton.setDisable(true);
-        assignmentsButton.setDisable(true);
-        questionBankButton.setDisable(true);
-        lockedAccountsButton.setDisable(true);
     }
 
+    private void disposePages() {
+        if (classManager != null) classManager.dispose();
+        if (bankBrowser != null) bankBrowser.dispose();
+        if (templateManager != null) templateManager.dispose();
+        if (organizer != null) organizer.dispose();
+        if (examResults != null) examResults.dispose();
+        classManager = null; bankBrowser = null; templateManager = null; organizer = null; examResults = null;
+        pages.clear();
+    }
     private void showError(String title, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
+        AppUi.style(alert.getDialogPane());
         alert.initOwner(mainStage);
         alert.getDialogPane().setId("server-error-notice");
         alert.getDialogPane().setPrefWidth(560);
@@ -534,6 +461,7 @@ public class ServerApp extends Application {
     @Override
     public void stop() {
         workspaceVersion++;
+        disposePages();
         if (teacherLogin != null) teacherLogin.dispose();
         if (server != null) server.stop();
         if (ownsJpa) JpaUtil.close();

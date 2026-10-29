@@ -1,9 +1,6 @@
 package com.ptit.lanexam.server.network;
 
 import com.ptit.lanexam.common.dto.ExamDto;
-import com.ptit.lanexam.common.JsonUtil;
-import com.ptit.lanexam.common.MessageType;
-import com.ptit.lanexam.server.service.AssignmentService;
 import com.ptit.lanexam.server.service.AuthService;
 import com.ptit.lanexam.server.service.ExamService;
 
@@ -25,7 +22,6 @@ public class ExamServer {
     private final SessionRegistry registry;
     private final AuthService authService;
     private final ExamService examService;
-    private final AssignmentService assignmentService;
     // A handler lives as long as its socket. Start each one immediately instead of
     // queueing it behind connections that may remain open for the whole exam.
     private final ExecutorService clientPool = Executors.newVirtualThreadPerTaskExecutor();
@@ -43,20 +39,18 @@ public class ExamServer {
     private volatile long publishedDeadline;
 
     public ExamServer(SessionRegistry registry, AuthService authService, ExamService examService) {
-        this(registry, authService, examService, new AssignmentService());
-    }
-
-    public ExamServer(SessionRegistry registry, AuthService authService, ExamService examService,
-                      AssignmentService assignmentService) {
         this.registry = registry;
         this.authService = authService;
         this.examService = examService;
-        this.assignmentService = assignmentService;
     }
 
     public synchronized void start(int port) throws IOException {
         if (running) return;
+        // Restore before accepting logins; fail startup if the database cannot be read.
+        var recovered = examService.recoverPublishedExam();
         serverSocket = new ServerSocket(port);
+        publishedExamId = recovered.map(ExamDto::getId).orElse(null);
+        publishedDeadline = recovered.map(ExamDto::getDeadlineEpochMillis).orElse(0L);
         running = true;
         acceptThread = new Thread(this::acceptLoop, "lan-exam-accept");
         acceptThread.setDaemon(true);
@@ -78,7 +72,7 @@ public class ExamServer {
                 socket.setKeepAlive(true);
                 socket.setSoTimeout(20000);
                 try {
-                    ClientHandler handler = new ClientHandler(socket, registry, authService, examService, assignmentService,
+                    ClientHandler handler = new ClientHandler(socket, registry, authService, examService,
                             () -> publishedExamId, attemptGate, () -> running, requestSlots);
                     connections.add(handler);
                     try {
@@ -106,11 +100,25 @@ public class ExamServer {
     public record Publication(ExamDto exam, int notifiedStudents) {}
 
     public Publication openExam(Long templateId) {
+        return openExam(templateId, null);
+    }
+
+    public Publication openExam(Long templateId, Long classId) {
+        return openExam(templateId, classId, null);
+    }
+
+    public Publication openExam(Long templateId, Long classId, Long shiftId) {
+        return openExam(templateId, classId, shiftId, 1);
+    }
+    public Publication openExam(Long templateId, Long classId, Long shiftId, int variants) {
+        if (variants < 1 || variants > 8) throw new IllegalArgumentException("Số mã đề từ 1 đến 8.");
         ExamDto exam;
         attemptGate.writeLock().lock();
         try {
             if (!running) throw new IllegalStateException("Server đã dừng. Không thể mở đề.");
-            exam = examService.activateExam(templateId);
+            exam = variants > 1 ? examService.activateExam(templateId, classId, shiftId, variants)
+                    : shiftId != null ? examService.activateExam(templateId, classId, shiftId)
+                    : classId == null ? examService.activateExam(templateId) : examService.activateExam(templateId, classId);
             publishedExamId = exam.getId();
             publishedDeadline = exam.getDeadlineEpochMillis();
         } finally { attemptGate.writeLock().unlock(); }
@@ -140,6 +148,10 @@ public class ExamServer {
             }
         }
         return count;
+    }
+
+    public void refreshEligibility() {
+        notifyExamAvailability();
     }
 
     public synchronized void stop() {
@@ -180,9 +192,4 @@ public class ExamServer {
 
     public int getPort() { return serverSocket == null ? -1 : serverSocket.getLocalPort(); }
 
-    public void notifyAssignmentsChanged() {
-        if (!running) return;
-        for (ClientSession session : registry.allSessions())
-            session.getHandler().send(JsonUtil.message(MessageType.ASSIGNMENTS_CHANGED, null));
-    }
 }

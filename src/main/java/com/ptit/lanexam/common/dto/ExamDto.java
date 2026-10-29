@@ -11,6 +11,9 @@ public class ExamDto {
     private long deadlineEpochMillis;
     private long serverTimeEpochMillis;
     private List<QuestionDto> questions = new ArrayList<>();
+    private java.util.Map<Long, String> savedAnswers = new java.util.LinkedHashMap<>();
+    public java.util.Map<Long, String> getSavedAnswers() { return savedAnswers; }
+    public void setSavedAnswers(java.util.Map<Long, String> value) { savedAnswers = value == null ? java.util.Map.of() : value; }
 
     public ExamDto() {}
     public ExamDto(Long id, String title, int durationSeconds, List<QuestionDto> questions) {

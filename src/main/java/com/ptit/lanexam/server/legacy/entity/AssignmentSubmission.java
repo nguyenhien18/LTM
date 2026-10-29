@@ -1,8 +1,11 @@
-package com.ptit.lanexam.server.entity;
+package com.ptit.lanexam.server.legacy.entity;
+
+import com.ptit.lanexam.server.entity.*;
 
 import jakarta.persistence.*;
 import java.time.Instant;
 
+/** Mapping retained only to read existing historical data; no practical API is exposed. */
 @Entity
 @Table(name = "assignment_submissions",
        uniqueConstraints = @UniqueConstraint(columnNames = {"assignment_id", "student_id"}))
@@ -25,6 +28,12 @@ public class AssignmentSubmission {
     private byte[] fileData;
     @Column(name = "submitted_at", nullable = false)
     private Instant submittedAt;
+    @Column(name = "score")
+    private Double score;
+    @Column(name = "feedback", length = 5000)
+    private String feedback;
+    @Column(name = "graded_at")
+    private Instant gradedAt;
 
     public AssignmentSubmission() {}
     public AssignmentSubmission(Assignment assignment, Student student) {
@@ -35,11 +44,20 @@ public class AssignmentSubmission {
     public void update(String content, Instant time) {
         this.content = content;
         this.submittedAt = time;
+        this.score = null;
+        this.feedback = null;
+        this.gradedAt = null;
     }
     public void setFile(String name, byte[] data) {
         this.fileName = name;
         this.fileData = data;
         this.fileSize = data == null ? 0 : data.length;
+    }
+
+    public void grade(double score, String feedback, Instant at) {
+        this.score = score;
+        this.feedback = feedback;
+        this.gradedAt = at;
     }
 
     public Long getId() { return id; }
@@ -50,4 +68,7 @@ public class AssignmentSubmission {
     public long getFileSize() { return fileSize; }
     public byte[] getFileData() { return fileData; }
     public Instant getSubmittedAt() { return submittedAt; }
+    public Double getScore() { return score; }
+    public String getFeedback() { return feedback; }
+    public Instant getGradedAt() { return gradedAt; }
 }

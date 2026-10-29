@@ -3,7 +3,6 @@ package com.ptit.lanexam.server.service;
 import com.ptit.lanexam.client.network.LanClient;
 import com.ptit.lanexam.common.*;
 import com.ptit.lanexam.common.dto.*;
-import com.ptit.lanexam.common.dto.AssignmentMessages.*;
 import com.ptit.lanexam.server.entity.*;
 import com.ptit.lanexam.server.network.*;
 import jakarta.persistence.*;
@@ -37,7 +36,7 @@ class TeacherAccountIntegrationTest {
         if (factory != null) factory.close();
     }
 
-    @Test void firstAccountInheritsLegacyDataAndPasswordsAreSalted() {
+    @Test void newAccountsStartEmptyAndLeaveLegacyDataUntouchedAndPasswordsAreSalted() {
         QuestionBankService oldBank = new QuestionBankService(factory::createEntityManager);
         SubjectInfo subject = oldBank.createSubject("Mạng máy tính");
         BankQuestionInfo question = oldBank.createQuestion(choice(subject.id()));
@@ -46,7 +45,6 @@ class TeacherAccountIntegrationTest {
         ExamDto round = oldExams.activateExam(template.id());
         oldExams.startAttempt("ST001", round.getId());
         oldExams.submit("ST001", new SubmitExamRequest(round.getId(), Map.of(round.getQuestions().getFirst().getId(), "A")));
-        Long homework = new AssignmentService(factory::createEntityManager).create(new AssignmentDraft("Bài cũ", "Nội dung", null, null, null));
 
         TeacherIdentity first = accounts.create(" GV01 ", "Giáo viên Một", PASSWORD);
         TeacherIdentity second = accounts.create("gv02", "Giáo viên Hai", PASSWORD);
@@ -54,20 +52,20 @@ class TeacherAccountIntegrationTest {
         assertEquals(first, accounts.authenticate("GV01", PASSWORD).orElseThrow());
         assertTrue(accounts.authenticate("gv01", "SaiMatKhau").isEmpty());
         assertTrue(accounts.authenticate("unknown", PASSWORD).isEmpty());
-        assertEquals(List.of(subject.id()), bank(first).listSubjects().stream().map(SubjectInfo::id).toList());
-        assertThrows(IllegalArgumentException.class, () -> bank(first).createSubject("MẠNG MÁY TÍNH"));
-        assertEquals(template.id(), exams(first).listExams().getFirst().id());
-        assertEquals(10.0, exams(first).listResults().getFirst().score());
-        assertEquals(homework, assignments(first).listForTeacher().getFirst().id());
+        assertTrue(bank(first).listSubjects().isEmpty());
+        assertTrue(exams(first).listExams().isEmpty());
+        assertTrue(exams(first).listResults().isEmpty());
+        assertTrue(new ClassService(factory::createEntityManager, first.id()).list().isEmpty());
+        assertEquals(template.id(), oldExams.listExams().getFirst().id());
+        assertEquals(10.0, oldExams.listResults().getFirst().score());
         assertTrue(bank(second).listSubjects().isEmpty());
         assertTrue(exams(second).listResults().isEmpty());
-        assertTrue(assignments(second).listForTeacher().isEmpty());
         try (EntityManager em = factory.createEntityManager()) {
             String firstHash = em.find(Teacher.class, first.id()).getPasswordHash();
             String secondHash = em.find(Teacher.class, second.id()).getPasswordHash();
             assertTrue(firstHash.startsWith("pbkdf2$600000$"));
             assertFalse(firstHash.contains(PASSWORD)); assertNotEquals(firstHash, secondHash);
-            assertEquals(first.id(), em.find(Exam.class, round.getId()).getOwnerTeacherId());
+            assertNull(em.find(Exam.class, round.getId()).getOwnerTeacherId());
         }
     }
 
@@ -87,7 +85,7 @@ class TeacherAccountIntegrationTest {
         assertThrows(IllegalArgumentException.class, () -> bank(b).createQuestion(choice(subjectA.id())));
         assertThrows(IllegalArgumentException.class, () -> exams(b).createExamFromBank(new BankExamDraft("Sai", 20, subjectA.id(), List.of(questionA.id()))));
         assertThrows(IllegalArgumentException.class, () -> exams(b).activateExam(templateA.id()));
-        ExamDto roundA = exams(a).activateExam(templateA.id());
+        ExamDto roundA = exams(a).activateExam(templateA.id(), enrolledClass(a, subjectA.id()));
         assertThrows(IllegalArgumentException.class, () -> exams(b).startAttempt("ST001", roundA.getId()));
         assertThrows(IllegalArgumentException.class, () -> exams(b).findOffer("ST001", roundA.getId()));
         exams(a).startAttempt("ST001", roundA.getId());
@@ -98,15 +96,7 @@ class TeacherAccountIntegrationTest {
         assertTrue(exams(b).listResults().isEmpty()); assertTrue(exams(b).listStudentHistory("ST001").isEmpty());
         assertTrue(exams(b).getExamResult("ST001", roundA.getId()).isEmpty());
         assertTrue(exams(b).getOpenAttempt("ST001").isEmpty());
-        Long taskA = assignments(a).create(new AssignmentDraft("Bài A", "Đề A", null, "de.txt", new byte[]{1, 2}));
-        AssignmentSubmissionInfo submission = assignments(a).submit("ST001", new SubmitRequest(taskA, "Bài làm", "bai.txt", new byte[]{3, 4}, false));
-        assertTrue(assignments(b).listForTeacher().isEmpty()); assertTrue(assignments(b).listForStudent("ST001").isEmpty());
-        assertTrue(assignments(b).listSubmissions(taskA).isEmpty());
-        assertThrows(IllegalArgumentException.class, () -> assignments(b).downloadAssignment(taskA));
-        assertThrows(IllegalArgumentException.class, () -> assignments(b).downloadSubmission(submission.id()));
-        assertThrows(IllegalArgumentException.class, () -> assignments(b).downloadForStudent("ST001", new FileRequest(taskA, false)));
-        assertThrows(IllegalArgumentException.class, () -> assignments(b).downloadForStudent("ST001", new FileRequest(taskA, true)));
-        assertThrows(IllegalArgumentException.class, () -> assignments(b).submit("ST001", new SubmitRequest(taskA, "Sai", null, null, false)));
+
     }
 
     @Test void anotherTeacherCannotLoginWhileAnOfflineAttemptIsStillOpen() {
@@ -147,12 +137,9 @@ class TeacherAccountIntegrationTest {
     @Test void tcpStudentSeesOnlyCurrentTeachersDataAndSafeLogoutClosesConnections() throws Exception {
         TeacherIdentity a = accounts.create("gv01", "Một", PASSWORD);
         TeacherIdentity b = accounts.create("gv02", "Hai", PASSWORD);
-        assignments(a).create(new AssignmentDraft("Bài A", "A", null, null, null));
-        assignments(b).create(new AssignmentDraft("Bài B", "B", null, null, null));
         ExamDto roundA = round(a, "Đề A");
-        ExamServer first = startServer(exams(a), assignments(a)); first.publishExam(roundA);
+        ExamServer first = startServer(exams(a)); first.publishExam(roundA);
         Peer student = login(first);
-        assertEquals("Bài A", JsonUtil.payload(student.await(MessageType.ASSIGNMENTS_RESULT), ListResult.class).items().getFirst().title());
         student.send(MessageType.JOIN_EXAM, new JoinExamRequest(roundA.getId())); student.await(MessageType.EXAM_STARTED);
         assertThrows(IllegalStateException.class, first::stopIfIdle); assertTrue(first.isRunning());
         student.close(); // An offline student still owns an open attempt.
@@ -165,9 +152,8 @@ class TeacherAccountIntegrationTest {
         assertNotNull(unauthenticated.disconnected.poll(5, TimeUnit.SECONDS));
 
         ExamDto roundB = round(b, "Đề B");
-        ExamServer second = startServer(exams(b), assignments(b)); second.publishExam(roundB);
+        ExamServer second = startServer(exams(b)); second.publishExam(roundB);
         Peer current = login(second);
-        assertEquals("Bài B", JsonUtil.payload(current.await(MessageType.ASSIGNMENTS_RESULT), ListResult.class).items().getFirst().title());
         current.send(MessageType.HISTORY_REQUEST, null);
         assertTrue(JsonUtil.payload(current.await(MessageType.HISTORY_RESULT), ExamHistoryResponse.class).items().isEmpty());
         current.send(MessageType.JOIN_EXAM, new JoinExamRequest(roundA.getId())); current.await(MessageType.ERROR);
@@ -190,8 +176,8 @@ class TeacherAccountIntegrationTest {
                 return super.startAttempt(code, id);
             }
         };
-        ExamServer server = startServer(slow, assignments(a)); server.publishExam(round);
-        Peer peer = login(server); peer.await(MessageType.ASSIGNMENTS_RESULT);
+        ExamServer server = startServer(slow); server.publishExam(round);
+        Peer peer = login(server);
         peer.send(MessageType.JOIN_EXAM, new JoinExamRequest(round.getId()));
         assertTrue(entered.await(5, TimeUnit.SECONDS));
         try (ExecutorService worker = Executors.newSingleThreadExecutor()) {
@@ -213,16 +199,25 @@ class TeacherAccountIntegrationTest {
         }
     }
     private ExamService exams(TeacherIdentity teacher) { return new ExamService(factory::createEntityManager, teacher.id()); }
-    private AssignmentService assignments(TeacherIdentity teacher) { return new AssignmentService(factory::createEntityManager, Clock.systemUTC(), teacher.id()); }
     private static BankQuestionDraft choice(Long subject) {
         return new BankQuestionDraft(subject, 1, new ExamDraft.QuestionDraft("Chọn A", QuestionType.MULTIPLE_CHOICE, "Một", "Hai", "Ba", "Bốn", "A"));
     }
     private ExamDto round(TeacherIdentity teacher, String name) {
         ExamSummary template = exams(teacher).createExam(new ExamDraft(name, 20, List.of(choice(1L).question())));
-        return exams(teacher).activateExam(template.id());
+        return exams(teacher).activateExam(template.id(), enrolledClass(teacher, null));
     }
-    private ExamServer startServer(ExamService exams, AssignmentService tasks) throws Exception {
-        ExamServer server = new ExamServer(new SessionRegistry(), new AuthService(factory::createEntityManager), exams, tasks);
+    private Long enrolledClass(TeacherIdentity teacher, Long subjectId) {
+        if (subjectId == null) subjectId = bank(teacher).listSubjects().stream().findFirst().map(SubjectInfo::id)
+                .orElseGet(() -> bank(teacher).createSubject("Môn thử nghiệm").id());
+        Long selectedSubject = subjectId;
+        ClassService service = new ClassService(factory::createEntityManager, teacher.id());
+        Long id = service.list().stream().filter(c -> c.subjectId().equals(selectedSubject)).findFirst().map(ClassInfo::id)
+                .orElseGet(() -> service.create("TEST-" + selectedSubject, "Lớp thử nghiệm", "HK1", selectedSubject).id());
+        service.importRoster(id, RosterCsv.parse("student_code,full_name,birth_date\nST001,Nguyễn An,2003-05-12"));
+        return id;
+    }
+    private ExamServer startServer(ExamService exams) throws Exception {
+        ExamServer server = new ExamServer(new SessionRegistry(), new AuthService(factory::createEntityManager), exams);
         servers.add(server); server.start(0); return server;
     }
     private Peer connect(ExamServer server) throws Exception {
@@ -244,7 +239,7 @@ class TeacherAccountIntegrationTest {
                 NetworkMessage message = messages.poll(Math.max(1, end - System.nanoTime()), TimeUnit.NANOSECONDS);
                 assertNotNull(message, "Không nhận được " + type);
                 if (message.getType() == type) return message;
-                if (message.getType() == MessageType.ERROR || message.getType() == MessageType.ASSIGNMENT_ERROR) fail("Server trả lỗi: " + message.getPayload());
+                if (message.getType() == MessageType.ERROR) fail("Server trả lỗi: " + message.getPayload());
             }
             throw new AssertionError("Timeout " + type);
         }

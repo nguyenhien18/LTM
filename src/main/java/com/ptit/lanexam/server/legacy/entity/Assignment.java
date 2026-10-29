@@ -1,8 +1,11 @@
-package com.ptit.lanexam.server.entity;
+package com.ptit.lanexam.server.legacy.entity;
+
+import com.ptit.lanexam.server.entity.*;
 
 import jakarta.persistence.*;
 import java.time.Instant;
 
+/** Mapping retained only to read existing historical data; no practical API is exposed. */
 @Entity
 @Table(name = "assignments")
 public class Assignment extends TeacherOwned {
@@ -23,6 +26,13 @@ public class Assignment extends TeacherOwned {
     @Lob @Column(name = "file_data", columnDefinition = "LONGBLOB")
     private byte[] fileData;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "class_id")
+    private CourseClass courseClass;
+
+    public CourseClass getCourseClass() { return courseClass; }
+    public void setCourseClass(CourseClass value) { courseClass = value; }
+
     public Assignment() {}
     public Assignment(String title, String description, Instant createdAt, Instant dueAt,
                       String fileName, byte[] fileData) {
@@ -40,6 +50,12 @@ public class Assignment extends TeacherOwned {
     public String getDescription() { return description; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getDueAt() { return dueAt; }
+    public void closeAt(Instant time) {
+        // MySQL timestamps use microseconds. Truncate so DB rounding cannot move
+        // the closing boundary into the future and reject an immediate grading action.
+        time = time.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        if (dueAt == null || dueAt.isAfter(time)) dueAt = time;
+    }
     public String getFileName() { return fileName; }
     public long getFileSize() { return fileSize; }
     public byte[] getFileData() { return fileData; }

@@ -24,17 +24,9 @@ public class TeacherAccountService {
                 em.getTransaction().begin();
                 if (!em.createQuery("select t.id from Teacher t where t.username = :login", Long.class)
                         .setParameter("login", login).getResultList().isEmpty()) throw new IllegalArgumentException("Tên đăng nhập đã tồn tại.");
-                boolean first = em.createQuery("select count(t) from Teacher t", Long.class).getSingleResult() == 0;
                 Teacher teacher = new Teacher(login, fullName.strip(), hash);
                 em.persist(teacher); em.flush();
-                if (first) {
-                    // Preserve all existing questions, exams, homework and their results for the first account.
-                    for (String type : List.of("Subject", "BankQuestion", "Exam", "Assignment"))
-                        em.createQuery("update " + type + " e set e.ownerTeacherId = :owner where e.ownerTeacherId is null")
-                                .setParameter("owner", teacher.getId()).executeUpdate();
-                    em.createQuery("update Subject s set s.normalizedName = concat(:prefix, s.normalizedName) where s.ownerTeacherId = :owner")
-                            .setParameter("prefix", "gv" + teacher.getId() + ":").setParameter("owner", teacher.getId()).executeUpdate();
-                }
+                // A new teacher starts with an empty workspace. Existing unowned data stays intact.
                 TeacherIdentity result = identity(teacher);
                 em.getTransaction().commit(); return result;
             } catch (RuntimeException ex) { if (em.getTransaction().isActive()) em.getTransaction().rollback(); throw ex; }
@@ -51,12 +43,12 @@ public class TeacherAccountService {
             List<Long> runningOwners = em.createQuery("select distinct e.ownerTeacherId from Exam e "
                             + "where e.active = true and e.deadlineAt > :now", Long.class)
                     .setParameter("now", Instant.now()).getResultList();
-            if (runningOwners.stream().anyMatch(owner -> !Objects.equals(owner, teacher.getId())))
+            if (runningOwners.stream().anyMatch(owner -> owner != null && !Objects.equals(owner, teacher.getId())))
                 throw new IllegalStateException("Ca thi của giáo viên khác đang diễn ra. Hãy chờ hết giờ và chấm xong trước khi đổi giáo viên.");
             List<Long> activeOwners = em.createQuery("select distinct a.exam.ownerTeacherId from ExamAttempt a "
                             + "where a.submittedAt is null and a.deadlineAt > :now", Long.class)
                     .setParameter("now", Instant.now()).getResultList();
-            if (activeOwners.stream().anyMatch(owner -> !Objects.equals(owner, teacher.getId())))
+            if (activeOwners.stream().anyMatch(owner -> owner != null && !Objects.equals(owner, teacher.getId())))
                 throw new IllegalStateException("Còn sinh viên đang làm bài của giáo viên khác. Hãy đăng nhập lại giáo viên phụ trách hoặc chờ hết giờ.");
             return Optional.of(identity(teacher));
         }

@@ -35,6 +35,25 @@ public class Exam extends TeacherOwned {
     @Column(name = "template_exam_id")
     private Long templateExamId;
 
+    @Lob @Column(name = "variants_json", columnDefinition = "MEDIUMTEXT")
+    private String variantsJson;
+    public String getVariantsJson() { return variantsJson; }
+    public void setVariantsJson(String value) { variantsJson = value; }
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "class_id")
+    private CourseClass courseClass;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "shift_id", unique = true)
+    private ExamShift shift;
+
+    public ExamShift getShift() { return shift; }
+    public void setShift(ExamShift shift) { this.shift = shift; }
+
+    public CourseClass getCourseClass() { return courseClass; }
+    public void setCourseClass(CourseClass value) { courseClass = value; }
+
     @OneToMany(mappedBy = "exam", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("id ASC")
     private List<Question> questions = new ArrayList<>();

@@ -4,6 +4,9 @@
         <provider>org.hibernate.jpa.HibernatePersistenceProvider</provider>
 
         <class>com.ptit.lanexam.server.entity.Student</class>
+        <class>com.ptit.lanexam.server.entity.CourseClass</class>
+        <class>com.ptit.lanexam.server.entity.ClassStudent</class>
+        <class>com.ptit.lanexam.server.entity.ExamShift</class>
         <class>com.ptit.lanexam.server.entity.Teacher</class>
         <class>com.ptit.lanexam.server.entity.Exam</class>
         <class>com.ptit.lanexam.server.entity.Question</class>
@@ -12,8 +15,8 @@
         <class>com.ptit.lanexam.server.entity.Submission</class>
         <class>com.ptit.lanexam.server.entity.StudentAnswer</class>
         <class>com.ptit.lanexam.server.entity.ExamAttempt</class>
-        <class>com.ptit.lanexam.server.entity.Assignment</class>
-        <class>com.ptit.lanexam.server.entity.AssignmentSubmission</class>
+        <class>com.ptit.lanexam.server.legacy.entity.Assignment</class>
+        <class>com.ptit.lanexam.server.legacy.entity.AssignmentSubmission</class>
 
         <properties>
             <property name="jakarta.persistence.jdbc.driver" value="com.mysql.cj.jdbc.Driver"/>

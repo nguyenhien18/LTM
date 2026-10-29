@@ -222,6 +222,53 @@ class QuestionBankIntegrationTest {
         }
     }
 
+    @Test void wordPreviewNeverWritesAndBatchImportPreservesLevelsAndReusesQuestionsForExams() throws Exception {
+        var parsed = QuestionWordImport.read(java.nio.file.Path.of("src/main/resources/templates/question-bank-template.docx"));
+        var preview = bank.previewWord(networks.id(), parsed);
+        assertFalse(preview.hasErrors()); assertEquals(6, preview.count(QuestionBankService.WordStatus.NEW));
+        assertTrue(bank.listQuestions(networks.id(), null).isEmpty());
+        var result = bank.importWord(networks.id(), parsed); assertEquals(6, result.imported()); assertEquals(0, result.skipped());
+        for (int level = 1; level <= 6; level++) assertEquals(1, bank.listQuestions(networks.id(), level).size());
+        var selected = bank.listQuestions(networks.id(), null).stream().map(BankQuestionInfo::id).toList();
+        assertEquals(6, exams.createExamFromBank(new BankExamDraft("Đề nhập Word", 20, networks.id(), selected)).questionCount());
+        assertTrue(bank.listQuestions(databases.id(), null).isEmpty());
+    }
+    @Test void wordImportSkipsExactDuplicatesInsideFileAndInExistingBankAndRechecksOnCommit() {
+        var parsed = QuestionWordImport.parseText(QuestionWordImportTest.VALID + "\n" + QuestionWordImportTest.VALID);
+        var preview = bank.previewWord(networks.id(), parsed);
+        assertEquals(1, preview.count(QuestionBankService.WordStatus.NEW)); assertEquals(1, preview.count(QuestionBankService.WordStatus.DUPLICATE));
+        assertEquals(new QuestionBankService.WordImportResult(1, 1), bank.importWord(networks.id(), parsed));
+        assertEquals(new QuestionBankService.WordImportResult(0, 2), bank.importWord(networks.id(), parsed));
+        assertEquals(1, bank.listQuestions(networks.id(), null).size());
+        // A question added after preview is re-read in the transaction, rather than duplicated.
+        var another = QuestionWordImport.parseText(QuestionWordImportTest.VALID.replace("Giao thức tin cậy?", "Câu mới"));
+        assertEquals(1, bank.previewWord(networks.id(), another).count(QuestionBankService.WordStatus.NEW));
+        var q = another.items().getFirst(); bank.createQuestion(new BankQuestionDraft(networks.id(), q.difficulty(), q.question()));
+        assertEquals(0, bank.importWord(networks.id(), another).imported());
+    }
+    @Test void wordImportWithOneInvalidQuestionOrUnsupportedContentWritesNothing() {
+        var bad = QuestionWordImport.parseText(QuestionWordImportTest.VALID + "\n" + QuestionWordImportTest.VALID.replace("Đáp án: B", "Đáp án: E"));
+        var preview = bank.previewWord(networks.id(), bad);
+        assertTrue(preview.hasErrors()); assertEquals(1, preview.count(QuestionBankService.WordStatus.INVALID));
+        assertThrows(IllegalArgumentException.class, () -> bank.importWord(networks.id(), bad));
+        assertTrue(bank.listQuestions(networks.id(), null).isEmpty());
+        var unsupported = new QuestionWordImport.Parsed(QuestionWordImport.parseText(QuestionWordImportTest.VALID).items(), List.of("Có ảnh chưa hỗ trợ"));
+        assertThrows(IllegalArgumentException.class, () -> bank.importWord(networks.id(), unsupported));
+        assertTrue(bank.listQuestions(networks.id(), null).isEmpty());
+    }
+    @Test void wordImportEnforcesTeacherOwnershipAndNeverOverwritesExistingCorrectAnswer() {
+        var teacher = new TeacherAccountService(factory::createEntityManager).create("wordowner", "Giảng viên", "Matkhau123!");
+        var own = new QuestionBankService(factory::createEntityManager, teacher.id());
+        var subject = own.createSubject("Mạng"); var parsed = QuestionWordImport.parseText(QuestionWordImportTest.VALID);
+        own.importWord(subject.id(), parsed);
+        assertThrows(IllegalArgumentException.class, () -> bank.previewWord(subject.id(), parsed));
+        assertThrows(IllegalArgumentException.class, () -> bank.importWord(subject.id(), parsed));
+        assertThrows(IllegalArgumentException.class, () -> own.importWord(networks.id(), parsed));
+        var changed = QuestionWordImport.parseText(QuestionWordImportTest.VALID.replace("Đáp án: B", "Đáp án: A"));
+        own.importWord(subject.id(), changed);
+        assertEquals(Set.of("A", "B"), new HashSet<>(own.listQuestions(subject.id(), null).stream().map(BankQuestionInfo::correctAnswer).toList()));
+    }
+
     private static BankQuestionDraft choice(Long subject, int difficulty, String content, String answer) {
         return new BankQuestionDraft(subject, difficulty, new ExamDraft.QuestionDraft(content, QuestionType.MULTIPLE_CHOICE,
                 "TCP", "UDP", "HTTP", "FTP", answer));

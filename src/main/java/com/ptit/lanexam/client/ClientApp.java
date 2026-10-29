@@ -5,11 +5,12 @@ import com.ptit.lanexam.common.JsonUtil;
 import com.ptit.lanexam.common.MessageType;
 import com.ptit.lanexam.common.NetworkMessage;
 import com.ptit.lanexam.common.dto.*;
+import com.ptit.lanexam.common.ui.AppUi;
+import com.ptit.lanexam.common.ui.UiSupport;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.application.Platform;
-import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -59,12 +60,18 @@ public class ClientApp extends Application {
     private boolean dashboardVisible;
     private Label availableLabel;
     private Button joinButton;
-    private TableView<ExamHistoryItem> historyTable;
     private boolean joinPending;
-    private AssignmentPane assignmentPane;
     private Scene dashboardScene;
-    private List<AssignmentInfo> assignments = List.of();
     private final List<Alert> moderationNotices = new ArrayList<>();
+    private BorderPane dashboardHost;
+    private FlowPane assessmentCards;
+    private VBox examCard;
+    private VBox assessmentList;
+    private VBox resultsContent;
+    private final Map<String, Button> dashboardNavigation = new LinkedHashMap<>();
+    private TableView<StudentResult> combinedResults;
+    private Alert submitConfirmation;
+    private record StudentResult(String title, String score, java.time.LocalDateTime submittedAt, String detail) {}
 
     @Override
     public void start(Stage stage) {
@@ -74,6 +81,7 @@ public class ClientApp extends Application {
             int version = connectionVersion;
             Platform.runLater(() -> {
                 if (version != connectionVersion) return;
+                if (submitConfirmation != null) submitConfirmation.close();
                 connectionVersion++;
                 answerSuppliers.clear();
                 currentExam = null;
@@ -92,12 +100,11 @@ public class ClientApp extends Application {
 
     private void showLoginScene() {
         dashboardVisible = false;
-        if (assignmentPane != null) assignmentPane.dispose();
-        assignmentPane = null;
         dashboardScene = null;
-        assignments = List.of();
-        Label title = new Label("Đăng nhập hệ thống thi LAN");
-        title.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
+        assessmentCards = null;
+        combinedResults = null;
+        dashboardHost = null;
+        Label title = AppUi.label("Chào mừng đến LAN Exam", "page-title");
 
         TextField hostField = new TextField(lastHost);
         TextField portField = new TextField(lastPort);
@@ -106,28 +113,42 @@ public class ClientApp extends Application {
         portField.setId("login-port");
         studentCodeField.setId("login-code");
         studentCodeField.setPromptText("Ví dụ: B21DCCN001");
-        DatePicker birthDatePicker = new DatePicker(LocalDate.of(2003, 5, 12));
+        DatePicker birthDatePicker = new DatePicker();
         birthDatePicker.setId("login-birth-date");
         Button loginButton = new Button("Kết nối và đăng nhập");
         loginButton.setId("login-connect");
+        loginButton.getStyleClass().add("primary");
+        loginButton.setMaxWidth(Double.MAX_VALUE);
+        loginButton.setDefaultButton(true);
         connectionLabel = new Label("Chưa kết nối");
+        connectionLabel.getStyleClass().add("muted");
 
         GridPane form = new GridPane();
-        form.setHgap(10);
-        form.setVgap(10);
-        form.addRow(0, new Label("IP Server:"), hostField);
-        form.addRow(1, new Label("Port:"), portField);
-        form.addRow(2, new Label("Mã sinh viên:"), studentCodeField);
-        form.addRow(3, new Label("Ngày sinh:"), birthDatePicker);
+        form.setHgap(12);
+        form.setVgap(12);
+        ColumnConstraints labels = new ColumnConstraints();
+        labels.setMinWidth(100);
+        ColumnConstraints fields = new ColumnConstraints();
+        fields.setHgrow(Priority.ALWAYS);
+        form.getColumnConstraints().addAll(labels, fields);
+        birthDatePicker.setMaxWidth(Double.MAX_VALUE);
+        form.addRow(0, new Label("Địa chỉ Server"), hostField);
+        form.addRow(1, new Label("Cổng kết nối"), portField);
+        form.addRow(2, new Label("Mã sinh viên"), studentCodeField);
+        form.addRow(3, new Label("Ngày sinh"), birthDatePicker);
 
-        VBox root = new VBox(18, title, form, loginButton, connectionLabel);
+        VBox root = new VBox(18, AppUi.label("DÀNH CHO SINH VIÊN", "eyebrow"), title,
+                AppUi.label("Nhập địa chỉ do giảng viên cung cấp để vào phòng học.", "muted"), form, loginButton, connectionLabel);
         root.setAlignment(Pos.CENTER_LEFT);
-        root.setPadding(new Insets(28));
-        root.setMaxWidth(520);
+        root.getStyleClass().add("login-card");
+        root.setMaxWidth(530);
+        root.setMaxHeight(Region.USE_PREF_SIZE);
 
         StackPane wrapper = new StackPane(root);
         wrapper.setPadding(new Insets(20));
-        stage.setScene(new Scene(wrapper, 620, 420));
+        stage.setMinWidth(580);
+        stage.setMinHeight(580);
+        stage.setScene(AppUi.scene(wrapper, 660, 620));
 
         loginButton.setOnAction(e -> {
             connectionVersion++;
@@ -195,24 +216,6 @@ public class ClientApp extends Application {
                     }
                     case EXAM_STARTED -> showExam(JsonUtil.payload(message, ExamDto.class));
                     case SUBMIT_RESULT -> showResult(JsonUtil.payload(message, SubmitResult.class));
-                    case ASSIGNMENTS_RESULT -> {
-                        assignments = JsonUtil.payload(message, AssignmentMessages.ListResult.class).items();
-                        if (assignmentPane != null) assignmentPane.setItems(assignments);
-                    }
-                    case ASSIGNMENTS_CHANGED -> {
-                        if (assignmentPane != null) assignmentPane.requestList();
-                    }
-                    case ASSIGNMENT_SUBMITTED -> {
-                        if (assignmentPane != null)
-                            assignmentPane.submitted(JsonUtil.payload(message, AssignmentSubmissionInfo.class));
-                    }
-                    case ASSIGNMENT_FILE_RESULT -> {
-                        if (assignmentPane != null)
-                            assignmentPane.receivedFile(JsonUtil.payload(message, AssignmentMessages.FileResult.class));
-                    }
-                    case ASSIGNMENT_ERROR -> {
-                        if (assignmentPane != null) assignmentPane.fail(message.getPayload().asText());
-                    }
                     case VIOLATION_WARNING -> showModerationNotice(message.getPayload().asText(), false);
                     case ACCOUNT_LOCKED -> {
                         logoutToLogin();
@@ -221,7 +224,7 @@ public class ClientApp extends Application {
                     case ERROR -> {
                         if (currentExam != null && submitButton != null) {
                             submitButton.setDisable(false);
-                            submitButton.setText("NỘP BÀI");
+                            submitButton.setText("Nộp bài thi");
                         }
                         joinPending = false;
                         refreshDashboard();
@@ -250,6 +253,7 @@ public class ClientApp extends Application {
         joinPending = false;
         startHeartbeat();
         showDashboard();
+
     }
 
     private void showDashboard() {
@@ -260,77 +264,64 @@ public class ClientApp extends Application {
         }
         dashboardTimer.play();
         if (dashboardScene != null) {
-            stage.setScene(dashboardScene);
-            refreshDashboard();
-            return;
+            stage.setScene(dashboardScene); showStudentPage("assessments"); refreshDashboard(); return;
         }
-        Label title = new Label("Xin chào, " + studentName);
-        title.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
-        Label subtitle = new Label("Tham gia bài thi và nộp bài tập do giảng viên giao");
-
-        availableLabel = new Label();
-        availableLabel.setId("exam-offer-label");
-        availableLabel.setWrapText(true);
-        joinButton = new Button("Tham gia bài thi");
-        joinButton.setId("join-exam");
-        joinButton.setOnAction(e -> joinAvailableExam());
-        HBox offer = new HBox(20, availableLabel, joinButton);
-        offer.setAlignment(Pos.CENTER_LEFT);
-        offer.setPadding(new Insets(16));
-        offer.setStyle("-fx-border-color: #cccccc; -fx-border-radius: 6;");
-        HBox.setHgrow(availableLabel, Priority.ALWAYS);
-
-        historyTable = new TableView<>();
-        historyTable.getColumns().add(historyColumn("Mã lượt", 85,
-                item -> Long.toString(item.examId())));
-        historyTable.getColumns().add(historyColumn("Đề thi", 260, ExamHistoryItem::examTitle));
-        historyTable.getColumns().add(historyColumn("Điểm", 95,
-                item -> String.format(Locale.ROOT, "%.2f / 10", item.score())));
-        historyTable.getColumns().add(historyColumn("Số câu đúng", 105,
-                item -> item.correctCount() + "/" + item.totalQuestions()));
-        DateTimeFormatter timeFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
-        historyTable.getColumns().add(historyColumn("Thời gian nộp", 170,
-                item -> item.submittedAt().format(timeFormat)));
-        historyTable.setPlaceholder(new Label("Chưa có bài thi đã nộp"));
-        Button refreshButton = new Button("Làm mới trang");
-        refreshButton.setOnAction(e -> {
-            requestHistory();
-            if (assignmentPane != null) assignmentPane.requestList();
-        });
-        Button logoutButton = new Button("Đổi tài khoản / Đăng xuất");
-        logoutButton.setOnAction(e -> logoutToLogin());
-
-        VBox examContent = new VBox(14, offer, new Label("Lịch sử làm bài"), historyTable);
-        examContent.setPadding(new Insets(12));
-        assignmentPane = new AssignmentPane(stage, this::sendAssignmentMessage);
-        assignmentPane.setItems(assignments);
-        Tab examsTab = new Tab("Bài thi", examContent);
-        Tab assignmentsTab = new Tab("Bài tập", assignmentPane);
-        TabPane tabs = new TabPane(examsTab, assignmentsTab);
-        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        VBox root = new VBox(14, title, subtitle, tabs, new HBox(12, refreshButton, logoutButton));
-        root.setPadding(new Insets(22));
-        VBox.setVgrow(historyTable, Priority.ALWAYS);
-        VBox.setVgrow(tabs, Priority.ALWAYS);
-        dashboardScene = new Scene(root, 950, 740);
-        stage.setScene(dashboardScene);
-        refreshDashboard();
+        dashboardNavigation.clear();
+        Button waiting = studentNav("assessments", "Phòng chờ thi"), results = studentNav("results", "Kết quả của tôi");
+        Region space = new Region(); VBox.setVgrow(space, Priority.ALWAYS);
+        VBox sidebar = new VBox(7, AppUi.label("LAN Exam", "brand"), AppUi.label("Không gian sinh viên", "brand-caption"),
+                waiting, results, space, AppUi.label("Thi trắc nghiệm\ntrong mạng nội bộ", "sidebar-note"));
+        sidebar.getStyleClass().add("sidebar"); sidebar.setPrefWidth(190); sidebar.setMinWidth(190);
+        Button logout = new Button("Đăng xuất"); logout.setOnAction(event -> logoutToLogin());
+        HBox identity = AppUi.toolbar(AppUi.label("Phòng thi LAN", "section-title"), AppUi.spacer(),
+                AppUi.label(studentName, "muted"), AppUi.label("Đã kết nối", "badge"), logout); identity.getStyleClass().add("topbar");
+        availableLabel = AppUi.label("", "section-title"); availableLabel.setId("exam-offer-label");
+        joinButton = new Button("Tham gia bài thi"); joinButton.setId("join-exam"); joinButton.getStyleClass().add("primary");
+        joinButton.setOnAction(event -> joinAvailableExam());
+        examCard = AppUi.card(AppUi.label("CA THI DÀNH CHO BẠN", "badge"), availableLabel,
+                AppUi.label("Giảng viên mở ca cho đúng danh sách lớp. Hệ thống tự xác định ca thi của bạn.", "muted"), joinButton);
+        examCard.setMaxWidth(700);
+        assessmentCards = new FlowPane(16, 16, examCard); assessmentCards.setId("student-assessments");
+        Button refresh = new Button("Làm mới"); refresh.setOnAction(event -> requestHistory());
+        assessmentList = new VBox(20, AppUi.toolbar(AppUi.heading("Phòng chờ thi", "Chờ giảng viên bắt đầu. Bạn có thể tham gia khi ca thi được mở."),
+                AppUi.spacer(), refresh), assessmentCards); assessmentList.getStyleClass().add("page");
+        combinedResults = new TableView<>(); combinedResults.setId("student-results");
+        combinedResults.getColumns().add(UiSupport.column("Đề / Ca thi", 330, StudentResult::title));
+        combinedResults.getColumns().add(UiSupport.column("Điểm", 95, StudentResult::score));
+        combinedResults.getColumns().add(UiSupport.column("Số câu đúng", 130, StudentResult::detail));
+        combinedResults.getColumns().add(UiSupport.column("Nộp lúc", 170, row -> row.submittedAt().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))));
+        combinedResults.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        combinedResults.setPlaceholder(new Label("Bạn chưa có bài thi đã nộp."));
+        Button resultRefresh = new Button("Làm mới"); resultRefresh.setOnAction(event -> requestHistory());
+        resultsContent = new VBox(18, AppUi.toolbar(AppUi.heading("Kết quả của tôi", "Lịch sử các ca thi đã nộp trên Server này."), AppUi.spacer(), resultRefresh), combinedResults);
+        resultsContent.getStyleClass().add("page"); VBox.setVgrow(combinedResults, Priority.ALWAYS);
+        dashboardHost = new BorderPane(); BorderPane workspace = new BorderPane(dashboardHost); workspace.setTop(identity);
+        BorderPane root = new BorderPane(workspace); root.setLeft(sidebar);
+        dashboardScene = AppUi.scene(root, 1160, 780); stage.setMinWidth(960); stage.setMinHeight(650); stage.setScene(dashboardScene);
+        showStudentPage("assessments"); refreshDashboard();
+    }
+    private Button studentNav(String key, String title) {
+        Button button = new Button(title); button.setId("student-nav-" + key);
+        button.getStyleClass().add("nav-button"); button.setMaxWidth(Double.MAX_VALUE);
+        button.setOnAction(event -> showStudentPage(key)); dashboardNavigation.put(key, button);
+        return button;
     }
 
-    private TableColumn<ExamHistoryItem, String> historyColumn(String title, int width,
-            java.util.function.Function<ExamHistoryItem, String> value) {
-        TableColumn<ExamHistoryItem, String> column = new TableColumn<>(title);
-        column.setPrefWidth(width);
-        column.setCellValueFactory(cell -> new SimpleStringProperty(value.apply(cell.getValue())));
-        return column;
+    private void showStudentPage(String key) {
+        dashboardHost.setCenter(key.equals("results") ? resultsContent : assessmentList);
+        dashboardNavigation.forEach((name, button) -> {
+            button.getStyleClass().remove("active");
+            if (key.equals(name)) button.getStyleClass().add("active");
+        });
     }
 
     private void refreshDashboard() {
-        if (!dashboardVisible) return;
-        historyTable.getItems().setAll(history);
+        if (!dashboardVisible || combinedResults == null) return;
+        combinedResults.getItems().setAll(history.stream().map(item -> new StudentResult(
+                item.examTitle() + " · Ca #" + item.examId(), String.format(Locale.ROOT, "%.2f / 10", item.score()),
+                item.submittedAt(), item.correctCount() + "/" + item.totalQuestions())).toList());
         refreshOffer();
     }
-
     private void refreshOffer() {
         if (!dashboardVisible || joinButton == null) return;
         if (availableExam == null) {
@@ -338,11 +329,12 @@ public class ClientApp extends Application {
             joinButton.setDisable(true);
         } else {
             int seconds = remaining(offerDeadlineNanos);
-            availableLabel.setText("Đợt #" + availableExam.examId() + " — "
-                    + (availableExam.subjectName() == null ? "" : availableExam.subjectName() + " — ") + availableExam.title() + " — "
-                    + (seconds == 0 ? "Đã hết giờ." : "Còn " + (seconds / 60) + " phút " + (seconds % 60)
-                    + " giây; vào lại sẽ làm bài trống."));
-            joinButton.setText(seconds == 0 ? "Đã hết giờ" : availableExam.resumable() ? "Làm lại từ đầu" : "Tham gia bài thi");
+            availableLabel.setText(availableExam.title() + "\n"
+                    + (availableExam.className() == null ? "" : availableExam.className() + "\n")
+                    + (availableExam.subjectName() == null ? "" : availableExam.subjectName() + " · ") + "Đợt #" + availableExam.examId()
+                    + "\n" + (seconds == 0 ? "Đã hết giờ." : "Còn " + (seconds / 60) + " phút " + (seconds % 60) + " giây")
+                    + (availableExam.resumable() ? "\nTiếp tục với đáp án Server đã lưu; giữ nguyên hạn nộp." : ""));
+            joinButton.setText(seconds == 0 ? "Đã hết giờ" : availableExam.resumable() ? "Tiếp tục làm bài" : "Tham gia bài thi");
             joinButton.setDisable(joinPending || seconds == 0);
         }
     }
@@ -353,20 +345,6 @@ public class ClientApp extends Application {
             if (version != connectionVersion) return;
             try { client.send(JsonUtil.message(MessageType.HISTORY_REQUEST, null)); }
             catch (Exception ignored) { /* Disconnect listener returns to login when needed. */ }
-        });
-    }
-
-    private void sendAssignmentMessage(NetworkMessage message) {
-        int version = connectionVersion;
-        AssignmentPane source = assignmentPane;
-        outbound.execute(() -> {
-            if (version != connectionVersion) return;
-            try { client.send(message); }
-            catch (Exception ex) {
-                Platform.runLater(() -> {
-                    if (version == connectionVersion && source != null) source.fail(ex.getMessage());
-                });
-            }
         });
     }
 
@@ -404,25 +382,42 @@ public class ClientApp extends Application {
         Label title = new Label((exam.getSubjectName() == null ? "" : exam.getSubjectName() + " — ") + exam.getTitle());
         title.setWrapText(true);
         title.setMaxWidth(650);
-        title.setStyle("-fx-font-size: 20px; -fx-font-weight: bold;");
+        title.getStyleClass().add("section-title");
         Label timerLabel = new Label();
         timerLabel.setId("exam-timer");
         timerLabel.setMinWidth(Region.USE_PREF_SIZE);
-        timerLabel.setStyle("-fx-font-size: 18px; -fx-font-weight: bold;");
+        timerLabel.getStyleClass().add("timer");
         updateTimerLabel(timerLabel);
 
         VBox questionBox = new VBox(18);
-        questionBox.setPadding(new Insets(10));
+        questionBox.setPadding(new Insets(18, 24, 24, 24));
+        ScrollPane scroll = new ScrollPane(questionBox);
+        scroll.setId("exam-questions-scroll");
+        scroll.setFitToWidth(true);
+        List<VBox> questionCards = new ArrayList<>();
+        ExamQuestionNavigator navigator = new ExamQuestionNavigator(exam.getQuestions().size(), target -> {
+            questionBox.applyCss(); questionBox.layout();
+            double range = questionBox.getHeight() - scroll.getViewportBounds().getHeight();
+            double position = questionCards.get(target).getBoundsInParent().getMinY();
+            scroll.setVvalue(range <= 0 ? 0 : Math.max(0, Math.min(1, position / range)));
+        });
 
         int index = 1;
         for (QuestionDto q : exam.getQuestions()) {
+            int questionIndex = index - 1;
             VBox card = new VBox(8);
-            card.setPadding(new Insets(12));
-            card.setStyle("-fx-border-color: #cccccc; -fx-border-radius: 6; -fx-background-radius: 6;");
+            card.setId("question-card-" + index);
+            card.getStyleClass().addAll("card", "question-card");
             Label content = new Label("Câu " + index++ + ": " + q.getContent());
             content.setWrapText(true);
             content.setStyle("-fx-font-weight: bold;");
-            card.getChildren().add(content);
+            content.setMinWidth(0);
+            HBox.setHgrow(content, Priority.ALWAYS);
+            CheckBox review = new CheckBox("Xem lại");
+            review.setId("question-flag-" + (questionIndex + 1));
+            review.setMinWidth(Region.USE_PREF_SIZE);
+            review.setOnAction(event -> navigator.setFlagged(questionIndex, review.isSelected()));
+            card.getChildren().add(AppUi.toolbar(content, AppUi.spacer(), review));
 
             if ("MULTIPLE_CHOICE".equals(q.getType())) {
                 ToggleGroup group = new ToggleGroup();
@@ -430,9 +425,14 @@ public class ClientApp extends Application {
                     RadioButton rb = new RadioButton(option);
                     rb.setToggleGroup(group);
                     rb.setWrapText(true);
+                    String saved = exam.getSavedAnswers().get(q.getId());
+                    if (saved != null && !saved.isEmpty() && option.startsWith(saved + ".")) rb.setSelected(true);
                     card.getChildren().add(rb);
                 }
-                group.selectedToggleProperty().addListener((obs, old, selected) -> updateAnswers());
+                navigator.setAnswered(questionIndex, group.getSelectedToggle() != null);
+                group.selectedToggleProperty().addListener((obs, old, selected) -> {
+                    navigator.setAnswered(questionIndex, selected != null); updateAnswers();
+                });
                 answerSuppliers.put(q.getId(), () -> {
                     Toggle selected = group.getSelectedToggle();
                     if (selected == null) return "";
@@ -441,33 +441,38 @@ public class ClientApp extends Application {
                 });
             } else {
                 TextField answer = new TextField();
+                answer.setText(exam.getSavedAnswers().getOrDefault(q.getId(), ""));
+                navigator.setAnswered(questionIndex, !answer.getText().isBlank());
                 answer.setPromptText("Nhập đáp án");
                 card.getChildren().add(answer);
-                answer.textProperty().addListener((obs, old, value) -> updateAnswers());
+                answer.textProperty().addListener((obs, old, value) -> {
+                    navigator.setAnswered(questionIndex, !value.isBlank()); updateAnswers();
+                });
                 answerSuppliers.put(q.getId(), () -> answer.getText().trim());
             }
             questionBox.getChildren().add(card);
+            questionCards.add(card);
         }
 
-        submitButton = new Button("NỘP BÀI");
+        submitButton = new Button("Nộp bài thi");
+        submitButton.getStyleClass().add("primary");
         submitButton.setId("exam-submit");
         submitButton.setOnAction(e -> submitCurrentExam(false));
 
         HBox top = new HBox(20, title, new Region(), timerLabel);
         HBox.setHgrow(top.getChildren().get(1), Priority.ALWAYS);
         top.setAlignment(Pos.CENTER_LEFT);
-        top.setPadding(new Insets(14));
+        top.getStyleClass().add("topbar");
 
-        ScrollPane scroll = new ScrollPane(questionBox);
-        scroll.setFitToWidth(true);
         BorderPane root = new BorderPane();
         root.setTop(top);
+        root.setLeft(navigator);
         root.setCenter(scroll);
-        HBox bottom = new HBox(submitButton);
-        bottom.setAlignment(Pos.CENTER_RIGHT);
-        bottom.setPadding(new Insets(14));
+        HBox bottom = AppUi.toolbar(AppUi.label("Kiểm tra đáp án trước khi nộp. Bài đã nộp không thể sửa.", "muted"),
+                AppUi.spacer(), submitButton);
+        bottom.getStyleClass().add("status-bar");
         root.setBottom(bottom);
-        stage.setScene(new Scene(root, 860, 650));
+        stage.setScene(AppUi.scene(root, 1000, 760));
 
         if (timer != null) timer.stop();
         timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> {
@@ -484,6 +489,26 @@ public class ClientApp extends Application {
 
     private void submitCurrentExam(boolean automatic) {
         if (currentExam == null || submitButton == null || submitButton.isDisabled()) return;
+        if (automatic && submitConfirmation != null) submitConfirmation.close();
+        if (!automatic) {
+            long unanswered = snapshotAnswers().values().stream().filter(value -> value == null || value.isBlank()).count();
+            if (unanswered > 0) {
+                ExamDto pendingExam = currentExam;
+                Alert confirm = new Alert(Alert.AlertType.CONFIRMATION);
+                confirm.initOwner(stage); AppUi.style(confirm.getDialogPane());
+                confirm.getDialogPane().setId("exam-submit-confirmation");
+                confirm.setTitle("Kiểm tra trước khi nộp");
+                confirm.setHeaderText("Bạn còn " + unanswered + " câu chưa trả lời.");
+                confirm.setContentText("Nộp bài ngay hoặc quay lại hoàn thành các câu còn thiếu.");
+                ButtonType submit = new ButtonType("Nộp bài", ButtonBar.ButtonData.OK_DONE);
+                ButtonType back = new ButtonType("Quay lại", ButtonBar.ButtonData.CANCEL_CLOSE);
+                confirm.getButtonTypes().setAll(submit, back);
+                submitConfirmation = confirm;
+                var selected = confirm.showAndWait();
+                submitConfirmation = null;
+                if (selected.orElse(back) != submit || currentExam != pendingExam || submitButton.isDisabled()) return;
+            }
+        }
         submitButton.setDisable(true);
         submitButton.setText("Đang nộp...");
         SubmitExamRequest request = new SubmitExamRequest(currentExam.getId(), snapshotAnswers());
@@ -496,7 +521,7 @@ public class ClientApp extends Application {
                 Platform.runLater(() -> {
                     if (version != connectionVersion) return;
                     submitButton.setDisable(false);
-                    submitButton.setText("NỘP BÀI");
+                    submitButton.setText("Nộp bài thi");
                     showAlert(Alert.AlertType.ERROR, "Không gửi được bài", ex.getMessage());
                 });
             }
@@ -524,31 +549,36 @@ public class ClientApp extends Application {
     }
 
     private void showResult(SubmitResult result) {
+        if (submitConfirmation != null) submitConfirmation.close();
         dashboardVisible = false;
         if (dashboardTimer != null) dashboardTimer.stop();
         if (timer != null) timer.stop();
         currentExam = null;
         Label title = new Label("Đã nộp bài");
-        title.setStyle("-fx-font-size: 24px; -fx-font-weight: bold;");
+        title.getStyleClass().add("page-title");
         Label score = new Label(String.format("Điểm: %.2f / 10", result.getScore()));
-        score.setStyle("-fx-font-size: 28px; -fx-font-weight: bold;");
+        score.getStyleClass().add("score");
         Label detail = new Label("Đúng " + result.getCorrectCount() + "/" + result.getTotalQuestions() + " câu");
         Label message = new Label(result.getMessage());
 
         Button waitButton = new Button("Về trang chính");
+        waitButton.getStyleClass().add("primary");
         waitButton.setOnAction(e -> showDashboard());
-        Button switchAccount = new Button("Đổi tài khoản / Đăng xuất");
+        Button switchAccount = new Button("Đăng xuất");
         switchAccount.setOnAction(e -> logoutToLogin());
         HBox actions = new HBox(12, waitButton, switchAccount);
         actions.setAlignment(Pos.CENTER);
 
-        VBox root = new VBox(16, title, score, detail, message, actions);
+        VBox root = AppUi.card(title, score, detail, message, actions);
         root.setAlignment(Pos.CENTER);
-        root.setPadding(new Insets(30));
-        stage.setScene(new Scene(root, 650, 420));
+        root.setMaxSize(620, Region.USE_PREF_SIZE);
+        StackPane wrapper = new StackPane(root);
+        wrapper.setPadding(new Insets(28));
+        stage.setScene(AppUi.scene(wrapper, 900, 650));
     }
 
     private void logoutToLogin() {
+        if (submitConfirmation != null) submitConfirmation.close();
         connectionVersion++;
         for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
@@ -571,6 +601,8 @@ public class ClientApp extends Application {
         int minutes = safe / 60;
         int seconds = safe % 60;
         label.setText(String.format("Còn lại: %02d:%02d", minutes, seconds));
+        label.getStyleClass().remove("urgent");
+        if (safe <= 60) label.getStyleClass().add("urgent");
     }
 
     private static long localDeadline(int seconds, long deadlineMillis, long serverMillis) {
@@ -602,6 +634,7 @@ public class ClientApp extends Application {
 
     private void showAlert(Alert.AlertType type, String title, String message) {
         Alert alert = new Alert(type);
+        AppUi.style(alert.getDialogPane());
         alert.setTitle(title);
         alert.setHeaderText(title);
         alert.setContentText(message == null ? "" : message);
@@ -610,6 +643,7 @@ public class ClientApp extends Application {
 
     private void showModerationNotice(String message, boolean locked) {
         Alert alert = new Alert(Alert.AlertType.WARNING);
+        AppUi.style(alert.getDialogPane());
         alert.initOwner(stage);
         alert.setTitle(locked ? "Tài khoản đã bị khóa" : "Cảnh báo vi phạm từ giảng viên");
         alert.setHeaderText(alert.getTitle());
@@ -624,10 +658,10 @@ public class ClientApp extends Application {
 
     @Override
     public void stop() {
+        if (submitConfirmation != null) submitConfirmation.close();
         for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
         if (dashboardTimer != null) dashboardTimer.stop();
-        if (assignmentPane != null) assignmentPane.dispose();
         stopHeartbeat();
         client.close();
         outbound.shutdownNow();

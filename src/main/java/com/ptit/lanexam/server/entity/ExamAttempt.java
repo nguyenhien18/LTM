@@ -28,6 +28,16 @@ public class ExamAttempt {
     @Column(name = "submitted_at")
     private Instant submittedAt;
 
+    @Column(name = "variant_code", length = 8)
+    private String variantCode;
+    public String getVariantCode() { return variantCode; }
+    public void setVariantCode(String value) { variantCode = value; }
+
+    @Lob @Column(name = "saved_answers_json", columnDefinition = "TEXT")
+    private String savedAnswersJson;
+    public String getSavedAnswersJson() { return savedAnswersJson; }
+    public void setSavedAnswersJson(String value) { savedAnswersJson = value; }
+
     protected ExamAttempt() {}
 
     public ExamAttempt(Student student, Exam exam, Instant startedAt) {

@@ -2,7 +2,7 @@ param([string]$Executable)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-if (-not $Executable) { $Executable = Join-Path $projectRoot 'dist\LANExamClient.exe' }
+if (-not $Executable) { $Executable = Join-Path $projectRoot 'dist\current\LANExamClient.exe' }
 $Executable = [IO.Path]::GetFullPath($Executable)
 if (-not (Test-Path -LiteralPath $Executable)) { throw "Khong tim thay $Executable" }
 $savedJavaHome = $env:JAVA_HOME
@@ -12,7 +12,7 @@ $bootstrap = $null
 try {
     $env:JAVA_HOME = ''
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-    $bootstrap = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable -Parent) -WindowStyle Normal -PassThru
+    $bootstrap = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable -Parent) -WindowStyle Hidden -PassThru
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     $descendants = [Collections.Generic.HashSet[int]]::new()
     $null = $descendants.Add($bootstrap.Id)

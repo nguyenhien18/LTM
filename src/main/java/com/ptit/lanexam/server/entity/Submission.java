@@ -9,6 +9,10 @@ import java.util.List;
 @Table(name = "submissions", uniqueConstraints =
         @UniqueConstraint(name = "uk_submission_student_exam", columnNames = {"student_id", "exam_id"}))
 public class Submission {
+    @Column(name = "variant_code", length = 8)
+    private String variantCode;
+    public String getVariantCode() { return variantCode; }
+    public void setVariantCode(String value) { variantCode = value; }
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

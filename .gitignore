@@ -1,5 +1,9 @@
 target/
 dist/
+/docs/
+/output/
+/packaging/
+/build-client-exe.bat
 .idea/
 *.iml
 .vscode/

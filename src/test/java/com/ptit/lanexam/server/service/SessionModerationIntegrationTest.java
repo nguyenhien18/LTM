@@ -44,7 +44,7 @@ class SessionModerationIntegrationTest {
         registry = new SessionRegistry();
         auth = new AuthService(factory::createEntityManager);
         exams = new ExamService(factory::createEntityManager);
-        server = new ExamServer(registry, auth, exams, new AssignmentService(factory::createEntityManager));
+        server = new ExamServer(registry, auth, exams);
         server.start(0);
     }
 
@@ -75,7 +75,6 @@ class SessionModerationIntegrationTest {
                 logins.add(() -> {
                     peer.sendLogin(code);
                     assertTrue(JsonUtil.payload(peer.await(MessageType.LOGIN_RESULT), LoginResponse.class).isSuccess(), code);
-                    peer.await(MessageType.ASSIGNMENTS_RESULT);
                     return null;
                 });
             }
@@ -295,7 +294,6 @@ class SessionModerationIntegrationTest {
         Peer peer = connect();
         peer.sendLogin(code);
         assertTrue(JsonUtil.payload(peer.await(MessageType.LOGIN_RESULT), LoginResponse.class).isSuccess());
-        peer.await(MessageType.ASSIGNMENTS_RESULT); // Login bootstrap is complete.
         return peer;
     }
 
@@ -333,7 +331,7 @@ class SessionModerationIntegrationTest {
                 NetworkMessage message = messages.poll(Math.max(1, end - System.nanoTime()), TimeUnit.NANOSECONDS);
                 assertNotNull(message, "Không nhận được " + type);
                 if (message.getType() == type) return message;
-                if (message.getType() == MessageType.ERROR || message.getType() == MessageType.ASSIGNMENT_ERROR)
+                if (message.getType() == MessageType.ERROR)
                     fail("Server trả lỗi: " + message.getPayload());
             }
             throw new AssertionError("Timeout: " + type);

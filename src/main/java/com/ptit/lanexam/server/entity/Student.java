@@ -19,6 +19,11 @@ public class Student {
     @Column(name = "birth_date", nullable = false)
     private LocalDate birthDate;
 
+    @Column(name = "regular_class", length = 80)
+    private String regularClass;
+    public String getRegularClass() { return regularClass; }
+    public void setRegularClass(String value) { regularClass = value; }
+
     @Column(name = "account_locked", nullable = false, columnDefinition = "boolean default false")
     private boolean accountLocked;
 
@@ -30,6 +35,9 @@ public class Student {
         this.studentCode = studentCode;
         this.fullName = fullName;
         this.birthDate = birthDate;
+    }
+    public Student(String studentCode, String fullName, LocalDate birthDate, String regularClass) {
+        this(studentCode, fullName, birthDate); this.regularClass = regularClass;
     }
 
     public Long getId() { return id; }

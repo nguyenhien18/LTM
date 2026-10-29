@@ -23,16 +23,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.function.Supplier;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class ExamService {
     public static final int MAX_BANK_EXAM_QUESTIONS = 200;
     private final Supplier<EntityManager> entityManagers;
     private final TeacherScope scope;
     private final Clock clock;
-    // Current answers are used only for deadline grading, never persisted or sent
-    // back to a client. Rejoining an attempt always clears them.
-    private final Map<Long, Map<Long, String>> currentAnswers = new ConcurrentHashMap<>();
+
     private final Object receiptLock = new Object();
     private final Set<RequestReceipt> pendingRequests = new java.util.HashSet<>();
 
@@ -199,6 +196,45 @@ public class ExamService {
         }
     }
 
+    /** Restore publication without reopening or changing the saved round. */
+    public Optional<ExamDto> recoverPublishedExam() {
+        try (EntityManager em = entityManagers.get()) {
+            return em.createQuery("select e from Exam e where e.active = true and e.deadlineAt > :now and "
+                            + scope.predicate("e") + " order by e.id desc", Exam.class)
+                    .setParameter("now", clock.instant()).setMaxResults(1).getResultStream().findFirst().map(this::toDto);
+        }
+    }
+
+    public record RoundProgress(Long roundId, Instant deadline, Map<String, String> states) {
+        public RoundProgress { states = Map.copyOf(states); }
+        public String state(String code, Instant now) {
+            String saved = states.get(code);
+            if ("Đã nộp".equals(saved)) return saved;
+            if (!now.isBefore(deadline)) return saved == null ? "Vắng thi" : "Đang chấm";
+            return saved == null ? "Chưa vào bài" : "Đang làm";
+        }
+    }
+
+    /** Progress belongs to a class/round, independently of socket sessions. */
+    public Optional<RoundProgress> roundProgress(Long classId, Long shiftId) {
+        try (EntityManager em = entityManagers.get()) {
+            ClassService.requireClass(em, classId, scope);
+            if (shiftId != null) ExamShiftService.require(em, classId, shiftId, scope);
+            var query = em.createQuery("select e from Exam e where e.courseClass.id = :class and e.templateExamId is not null and "
+                    + scope.predicate("e") + (shiftId == null ? " and e.shift is null" : " and e.shift.id = :shift")
+                    + " order by e.id desc", Exam.class).setParameter("class", classId).setMaxResults(1);
+            if (shiftId != null) query.setParameter("shift", shiftId);
+            Exam round = query.getResultStream().findFirst().orElse(null);
+            if (round == null || round.getDeadlineAt() == null) return Optional.empty();
+            Map<String, String> states = new java.util.HashMap<>();
+            em.createQuery("select a.student.studentCode, a.submittedAt from ExamAttempt a where a.exam = :exam", Object[].class)
+                    .setParameter("exam", round).getResultList().forEach(row -> states.put((String) row[0], row[1] == null ? "Đang làm" : "Đã nộp"));
+            em.createQuery("select s.student.studentCode from Submission s where s.exam = :exam", String.class)
+                    .setParameter("exam", round).getResultList().forEach(code -> states.put(code, "Đã nộp"));
+            return Optional.of(new RoundProgress(round.getId(), round.getDeadlineAt(), states));
+        }
+    }
+
     public List<ExamSummary> listExams() {
         EntityManager em = entityManagers.get();
         try {
@@ -221,6 +257,20 @@ public class ExamService {
     }
 
     public ExamDto activateExam(Long examId) {
+        return activateExam(examId, null);
+    }
+
+
+    public ExamDto activateExam(Long examId, Long classId) {
+        return activateExam(examId, classId, null);
+    }
+
+    public ExamDto activateExam(Long examId, Long classId, Long shiftId) {
+        return activateExam(examId, classId, shiftId, 1);
+    }
+
+    public ExamDto activateExam(Long examId, Long classId, Long shiftId, int variantCount) {
+        if (variantCount < 1 || variantCount > ExamVariants.MAX_VARIANTS) throw new IllegalArgumentException("Số mã đề từ 1 đến 8.");
         if (examId == null) throw new IllegalArgumentException("Chưa chọn bài thi.");
         finalizeExpiredAttempts();
         EntityManager em = entityManagers.get();
@@ -230,6 +280,17 @@ public class ExamService {
             if (scope.teacherId() != null) em.find(Teacher.class, scope.teacherId(), LockModeType.PESSIMISTIC_WRITE);
             Exam template = em.find(Exam.class, examId, LockModeType.PESSIMISTIC_WRITE);
             scope.require(template);
+            CourseClass courseClass = classId == null ? null : ClassService.requireClass(em, classId, scope);
+            if (courseClass != null) em.lock(courseClass, LockModeType.PESSIMISTIC_WRITE);
+            ExamShift shift = shiftId == null ? null : ExamShiftService.require(em, classId, shiftId, scope);
+            if (courseClass != null) {
+                var latestShifts = ExamShiftService.latest(em, classId);
+                if (!latestShifts.isEmpty() && (shift == null || latestShifts.stream().noneMatch(s -> s.getId().equals(shiftId))))
+                    throw new IllegalArgumentException("Chọn một ca trong danh sách đã chia của lớp.");
+            }
+            if (courseClass == null && scope.teacherId() != null) throw new IllegalArgumentException("Chọn lớp tham gia ca thi.");
+            if (courseClass != null && template.getSubject() != null && !courseClass.getSubject().getId().equals(template.getSubject().getId()))
+                throw new IllegalArgumentException("Môn của đề thi phải trùng với môn của lớp.");
             if (template == null || template.getTemplateExamId() != null)
                 throw new IllegalArgumentException("Không tìm thấy đề gốc đã chọn.");
             if (template.getQuestions().isEmpty()) throw new IllegalStateException("Bài thi không có câu hỏi.");
@@ -248,17 +309,23 @@ public class ExamService {
                         .setParameter("deadline", current.getDeadlineAt()).setParameter("exam", current).executeUpdate();
             }
             boolean sameTemplate = current != null && (examId.equals(current.getId())
-                    || examId.equals(current.getTemplateExamId()));
+                    || examId.equals(current.getTemplateExamId())) && java.util.Objects.equals(classId,
+                    current.getCourseClass() == null ? null : current.getCourseClass().getId())
+                    && java.util.Objects.equals(shiftId, current.getShift() == null ? null : current.getShift().getId());
             long openAttempts = em.createQuery("select count(a) from ExamAttempt a where a.exam.active = true "
                             + "and " + scope.predicate("a.exam") + " and a.submittedAt is null and a.deadlineAt > :now", Long.class)
                     .setParameter("now", clock.instant()).getSingleResult();
             if (openAttempts > 0 && !sameTemplate)
                 throw new IllegalStateException("Còn sinh viên đang làm bài hiện tại. Hãy chờ nộp hoặc hết giờ trước khi đổi bài.");
             if (sameTemplate && clock.instant().isBefore(current.getDeadlineAt())) {
+                if (ExamVariants.count(current) != variantCount) throw new IllegalStateException("Ca đã mở với số mã đề khác. Không thể đổi mã trong khi thi.");
                 ExamDto unchanged = toDto(current);
                 tx.commit();
                 return unchanged;
             }
+            if (shift != null && em.createQuery("select count(e) from Exam e where e.shift = :shift", Long.class)
+                    .setParameter("shift", shift).getSingleResult() > 0)
+                throw new IllegalStateException("Ca này đã mở thi. Chọn ca tiếp theo; ca đã thi giữ nguyên đề, danh sách và kết quả.");
             if (current != null && current.getDeadlineAt() != null && clock.instant().isBefore(current.getDeadlineAt()))
                 throw new IllegalStateException("Ca thi đang diễn ra. Chờ hết giờ và chấm xong trước khi mở đề khác.");
             long unfinished = em.createQuery("select count(a) from ExamAttempt a where a.submittedAt is null and " + scope.predicate("a.exam"), Long.class)
@@ -270,10 +337,18 @@ public class ExamService {
             scope.assign(round);
             round.setSubject(template.getSubject());
             round.setTemplateExamId(template.getId());
+            round.setCourseClass(courseClass);
+            round.setShift(shift);
             for (Question question : template.getQuestions())
                 round.addQuestion(question.copyForRound());
             em.persist(round);
             em.flush();
+            if (variantCount > 1) {
+                List<String> candidates = shift != null ? shift.getCandidates().stream().map(c -> c.getStudent().getStudentCode()).toList()
+                        : em.createQuery("select cs.student.studentCode from ClassStudent cs where cs.courseClass = :class order by cs.ordinal asc nulls last, cs.student.studentCode", String.class)
+                            .setParameter("class", courseClass).getResultList();
+                round.setVariantsJson(ExamVariants.create(round, variantCount, candidates));
+            }
             ExamDto result = toDto(round);
             tx.commit();
             return result;
@@ -286,14 +361,19 @@ public class ExamService {
     }
 
     public List<ExamResultRow> listResults() {
+        return results(null);
+    }
+    private List<ExamResultRow> results(Long classId) {
         EntityManager em = entityManagers.get();
         try {
-            return em.createQuery("select s from Submission s where " + scope.predicate("s.exam") + " order by s.submittedAt desc", Submission.class)
-                    .getResultList().stream()
+            var query = em.createQuery("select s from Submission s where " + scope.predicate("s.exam")
+                    + (classId == null ? "" : " and s.exam.courseClass.id = :group") + " order by s.submittedAt desc", Submission.class);
+            if (classId != null) query.setParameter("group", classId);
+            return query.getResultList().stream()
                     .map(s -> new ExamResultRow(s.getExam().getId(), s.getStudent().getStudentCode(), s.getStudent().getFullName(),
-                            s.getExam().getTitle(), s.getScore(),
+                            classId == null ? resultTitle(s.getExam()) : displayTitle(s.getExam()), s.getScore(),
                             (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
-                            s.getAnswers().size(), s.getSubmittedAt()))
+                            s.getAnswers().size(), s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId(), s.getVariantCode()))
                     .toList();
         } finally {
             em.close();
@@ -307,9 +387,9 @@ public class ExamService {
                             + "and " + scope.predicate("s.exam") + " "
                             + "order by s.submittedAt desc", Submission.class)
                     .setParameter("code", studentCode).getResultList().stream()
-                    .map(s -> new ExamHistoryItem(s.getExam().getId(), s.getExam().getTitle(), s.getScore(),
+                    .map(s -> new ExamHistoryItem(s.getExam().getId(), ExamVariants.title(displayTitle(s.getExam()), s.getVariantCode()), s.getScore(),
                             (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
-                            s.getAnswers().size(), s.getSubmittedAt()))
+                            s.getAnswers().size(), s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId()))
                     .toList();
         } finally {
             em.close();
@@ -329,14 +409,19 @@ public class ExamService {
                 Exam exam = attempt.getExam();
                 int seconds = (int) Math.min(Integer.MAX_VALUE,
                         Math.max(0, (attempt.getDeadlineAt().toEpochMilli() - clock.instant().toEpochMilli() + 999) / 1000));
-                return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), seconds, true, exam.getSubjectName(),
-                        attempt.getDeadlineAt().toEpochMilli(), clock.instant().toEpochMilli()));
+                return Optional.of(new ExamOffer(exam.getId(), ExamVariants.title(displayTitle(exam), attempt.getVariantCode()), seconds, true, exam.getSubjectName(),
+                        attempt.getDeadlineAt().toEpochMilli(), clock.instant().toEpochMilli(),
+                        exam.getCourseClass() == null ? null : exam.getCourseClass().displayName(),
+                        exam.getCourseClass() == null ? null : exam.getCourseClass().getId()));
             }
             if (publishedExamId == null) return Optional.empty();
             Exam exam = em.find(Exam.class, publishedExamId);
             if (exam == null || !exam.isActive() || exam.getDeadlineAt() == null
                     || !clock.instant().isBefore(exam.getDeadlineAt())) return Optional.empty();
             scope.require(exam);
+            if (!ClassService.eligible(em, exam.getCourseClass() == null ? null : exam.getCourseClass().getId(), studentCode, scope)) return Optional.empty();
+            if (!ExamShiftService.eligible(em, exam, studentCode)) return Optional.empty();
+            if (!ExamVariants.eligible(exam, studentCode)) return Optional.empty();
             long prior = em.createQuery("select count(a) from ExamAttempt a "
                             + "where a.student.studentCode = :code and a.exam = :exam", Long.class)
                     .setParameter("code", studentCode).setParameter("exam", exam).getSingleResult();
@@ -344,8 +429,10 @@ public class ExamService {
                             + "where s.student.studentCode = :code and s.exam = :exam", Long.class)
                     .setParameter("code", studentCode).setParameter("exam", exam).getSingleResult();
             if (prior > 0 || submitted > 0) return Optional.empty();
-            return Optional.of(new ExamOffer(exam.getId(), exam.getTitle(), remainingSeconds(exam.getDeadlineAt()), false, exam.getSubjectName(),
-                    exam.getDeadlineAt().toEpochMilli(), clock.instant().toEpochMilli()));
+            return Optional.of(new ExamOffer(exam.getId(), ExamVariants.title(displayTitle(exam), ExamVariants.code(exam, studentCode)), remainingSeconds(exam.getDeadlineAt()), false, exam.getSubjectName(),
+                    exam.getDeadlineAt().toEpochMilli(), clock.instant().toEpochMilli(),
+                    exam.getCourseClass() == null ? null : exam.getCourseClass().displayName(),
+                    exam.getCourseClass() == null ? null : exam.getCourseClass().getId()));
         } finally {
             em.close();
         }
@@ -386,10 +473,10 @@ public class ExamService {
             if (!receivedAt.isBefore(attempt.getDeadlineAt()) && hasPendingAnswers(attempt))
                 throw new IllegalStateException("Đang xử lý đáp án nhận trước hạn; Server sẽ gửi kết quả khi chấm xong.");
             Map<Long, String> answers = attempt.isOpenAt(receivedAt)
-                    ? validateAnswers(attempt.getExam(), request.getAnswers()) : currentAnswers.getOrDefault(attempt.getId(), Map.of());
+                    ? validateAnswers(attempt.getExam(), request.getAnswers()) : savedAnswers(attempt);
             SubmitResult result = persistSubmission(em, attempt, answers);
             tx.commit();
-            currentAnswers.remove(attempt.getId());
+
             return result;
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
@@ -408,6 +495,11 @@ public class ExamService {
                     .setParameter("code", studentCode).getSingleResult();
             Exam exam = em.find(Exam.class, examId, LockModeType.PESSIMISTIC_WRITE);
             scope.require(exam);
+            if (!ExamShiftService.eligible(em, exam, studentCode))
+                throw new IllegalArgumentException("Bạn không có tên trong ca thi này. Hãy chờ đúng ca được phân.");
+            if (!ExamVariants.eligible(exam, studentCode)) throw new IllegalArgumentException("Bạn không có trong danh sách đã phân mã đề của ca thi này.");
+            if (!(exam.getCourseClass() == null && findAttempt(em, studentCode, examId, LockModeType.NONE).isPresent()))
+                ClassService.requireEnrollment(em, exam.getCourseClass() == null ? null : exam.getCourseClass().getId(), studentCode, scope);
             if (exam == null || !exam.isActive() || exam.getDurationMinutes() <= 0)
                 throw new IllegalStateException("Đề thi không hợp lệ.");
             if (exam.getDeadlineAt() == null || !clock.instant().isBefore(exam.getDeadlineAt())) {
@@ -424,13 +516,14 @@ public class ExamService {
             ExamAttempt attempt = findAttempt(em, studentCode, examId, LockModeType.PESSIMISTIC_WRITE)
                     .orElseGet(() -> {
                         ExamAttempt created = new ExamAttempt(student, exam, clock.instant());
+                        created.setVariantCode(ExamVariants.code(exam, studentCode));
                         em.persist(created);
                         return created;
                     });
             Optional<ExamDto> result = attempt.isOpenAt(clock.instant())
                     ? Optional.of(toDto(attempt)) : Optional.empty();
             tx.commit();
-            if (result.isPresent()) currentAnswers.remove(attempt.getId());
+
             return result;
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
@@ -488,7 +581,7 @@ public class ExamService {
                 return;
             }
             Map<Long, String> answers = validateAnswers(attempt.getExam(), request.getAnswers());
-            currentAnswers.put(attempt.getId(), new java.util.HashMap<>(answers));
+            attempt.setSavedAnswersJson(writeAnswers(answers));
             tx.commit();
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
@@ -523,10 +616,10 @@ public class ExamService {
             }
             if (attempt != null && attempt.getSubmittedAt() == null && !attempt.isOpenAt(clock.instant())) {
                 if (findSubmission(em, attempt).isPresent()) attempt.markSubmitted(clock.instant());
-                else persistSubmission(em, attempt, currentAnswers.getOrDefault(attempt.getId(), Map.of()));
+                else persistSubmission(em, attempt, savedAnswers(attempt));
             }
             tx.commit();
-            currentAnswers.remove(id);
+
         } catch (RuntimeException e) {
             if (tx.isActive()) tx.rollback();
             throw e;
@@ -539,9 +632,11 @@ public class ExamService {
         Exam exam = attempt.getExam();
         int correct = 0;
         Submission submission = new Submission(attempt.getStudent(), exam, 0, LocalDateTime.ofInstant(clock.instant(), java.time.ZoneId.systemDefault()));
+        submission.setVariantCode(attempt.getVariantCode());
+        var variant = ExamVariants.variant(attempt);
         for (Question question : exam.getQuestions()) {
             String answer = answers.get(question.getId());
-            boolean right = isCorrect(question, answer);
+            boolean right = isCorrect(question, ExamVariants.originalAnswer(variant, question.getId(), answer));
             if (right) correct++;
             submission.addAnswer(new StudentAnswer(question, answer, right));
         }
@@ -550,6 +645,7 @@ public class ExamService {
         submission.setScore(score);
         em.persist(submission);
         attempt.markSubmitted(clock.instant());
+        attempt.setSavedAnswersJson(null);
         return new SubmitResult(score, correct, total, "Nộp bài thành công");
     }
 
@@ -562,6 +658,14 @@ public class ExamService {
     private SubmitResult toResult(Submission submission) {
         int correct = (int) submission.getAnswers().stream().filter(StudentAnswer::isCorrect).count();
         return new SubmitResult(submission.getScore(), correct, submission.getAnswers().size(), "Bài đã được nộp");
+    }
+
+    private static String resultTitle(Exam exam) {
+        return exam.getTitle() + (exam.getCourseClass() == null ? "" : " · " + exam.getCourseClass().displayName())
+                + (exam.getShift() == null ? "" : " · Ca " + exam.getShift().getNumber());
+    }
+    private static String displayTitle(Exam exam) {
+        return exam.getTitle() + (exam.getShift() == null ? "" : " · Ca " + exam.getShift().getNumber());
     }
 
     private ExamAttempt requireAttempt(EntityManager em, String studentCode, SubmitExamRequest request) {
@@ -592,11 +696,26 @@ public class ExamService {
 
     private ExamDto toDto(ExamAttempt attempt) {
         ExamDto dto = toDto(attempt.getExam());
+        var ordered = ExamVariants.questions(attempt);
+        if (ordered != null) dto.setQuestions(ordered);
+        dto.setTitle(ExamVariants.title(dto.getTitle(), attempt.getVariantCode()));
+        dto.setSavedAnswers(savedAnswers(attempt));
         long remainingMillis = Math.max(0, attempt.getDeadlineAt().toEpochMilli() - clock.instant().toEpochMilli());
         dto.setDurationSeconds((int) Math.min(Integer.MAX_VALUE, (remainingMillis + 999) / 1000));
         dto.setDeadlineEpochMillis(attempt.getDeadlineAt().toEpochMilli());
         dto.setServerTimeEpochMillis(clock.instant().toEpochMilli());
         return dto;
+    }
+
+    private static String writeAnswers(Map<Long, String> answers) {
+        try { return com.ptit.lanexam.common.JsonUtil.MAPPER.writeValueAsString(answers); }
+        catch (com.fasterxml.jackson.core.JsonProcessingException ex) { throw new IllegalStateException("Không lưu được đáp án.", ex); }
+    }
+    private static Map<Long, String> savedAnswers(ExamAttempt attempt) {
+        if (attempt.getSavedAnswersJson() == null || attempt.getSavedAnswersJson().isBlank()) return Map.of();
+        try { return com.ptit.lanexam.common.JsonUtil.MAPPER.readValue(attempt.getSavedAnswersJson(),
+                new com.fasterxml.jackson.core.type.TypeReference<Map<Long, String>>() {}); }
+        catch (com.fasterxml.jackson.core.JsonProcessingException ex) { throw new IllegalStateException("Không đọc được đáp án đã lưu. Liên hệ giảng viên.", ex); }
     }
 
     private boolean isCorrect(Question q, String answer) {
@@ -618,7 +737,7 @@ public class ExamService {
             }
             questions.add(new QuestionDto(q.getId(), q.getContent(), q.getType().name(), options));
         }
-        ExamDto dto = new ExamDto(exam.getId(), exam.getTitle(),
+        ExamDto dto = new ExamDto(exam.getId(), displayTitle(exam),
                 exam.getDeadlineAt() == null ? exam.getDurationMinutes() * 60 : remainingSeconds(exam.getDeadlineAt()), questions);
         if (exam.getDeadlineAt() != null) dto.setDeadlineEpochMillis(exam.getDeadlineAt().toEpochMilli());
         dto.setServerTimeEpochMillis(clock.instant().toEpochMilli());

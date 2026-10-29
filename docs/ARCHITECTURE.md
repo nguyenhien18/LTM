@@ -1,88 +1,86 @@
-# Kiến trúc
+# Kiến trúc hệ thống thi trắc nghiệm LAN
 
-```text
-                     MYSQL
-                       ^
-                       |
-                 JPA/Hibernate
-                       |
-              +------------------+
-              |    JAVA SERVER   |
-              |------------------|
-              | JavaFX Admin UI  |
-              | ServerSocket     |
-              | ExecutorService  |
-              | SessionRegistry  |
-              | AuthService      |
-              | ExamService      |
-              +---------+--------+
-                        |
-                  TCP + JSON
-                        |
-            +-----------+-----------+
-            |                       |
-      +-----+------+          +-----+------+
-      | JavaFX     |          | JavaFX     |
-      | Client A   |          | Client B   |
-      +------------+          +------------+
-```
+## Thành phần
 
-## Nguyên tắc
+- JavaFX Server: đăng nhập giảng viên và bốn trang Lớp & sinh viên / Ngân hàng câu hỏi / Tổ chức thi / Kết quả.
+- JavaFX Client: đăng nhập, phòng chờ, làm bài và lịch sử điểm; không có bước tự chọn lớp.
+- TCP JSON Lines: ServerSocket/Socket, luồng ảo cho kết nối, luồng đọc và hàng đợi xử lý FIFO riêng mỗi Client.
+- Hibernate/JPA + MySQL tại Server. Client không có driver/kết nối database.
 
-- Client **không truy cập MySQL trực tiếp**; MySQL chỉ nằm trên máy Server.
-- Server là nơi xác thực, chấm điểm, lưu dữ liệu và quản lý trạng thái.
-- Client chỉ gửi hành động/đáp án qua TCP.
-- Server có quyền quyết định trạng thái cuối cùng.
-- Mỗi kết nối TCP được xử lý ngay trên một virtual thread của Java 21. Handler giữ socket suốt phiên thi, nên không dùng hàng đợi tác vụ phía sau một nhóm luồng cố định.
-- Tối đa 16 yêu cầu Client được xử lý cùng lúc để dành chỗ trong pool database mặc định 20 kết nối cho giảng viên và tác vụ hết giờ. Yêu cầu chờ bằng semaphore; mọi kết nối vẫn mở và mỗi Client giữ đúng thứ tự thông điệp.
+## Danh tính, lớp và dữ liệu chung
 
-## Tài khoản giáo viên trên máy Server
+`TeacherAccountService` tạo tài khoản trống, mật khẩu PBKDF2-HMAC-SHA256 với salt riêng. `TeacherScope` giới hạn môn, ngân hàng, đề, ca và kết quả theo giảng viên.
 
-- `TeacherLoginPane` xác thực tài khoản cục bộ trước khi mở giao diện quản lý; mỗi lần một giáo viên sử dụng Server.
-- `TeacherAccountService` tạo tài khoản, đổi mật khẩu có kiểm tra mật khẩu cũ và chặn đăng nhập giáo viên khác khi ca hiện tại chưa hết giờ.
-- `TeacherPassword` dùng PBKDF2-HMAC-SHA256, 600.000 vòng lặp, salt ngẫu nhiên 16 byte; `TeacherIdentity` không chứa mật khẩu hoặc hash.
-- `TeacherOwned` bổ sung metadata chủ sở hữu cho môn, câu hỏi ngân hàng, đề/đợt thi và bài tập. Các service được khởi tạo với mã giáo viên đã đăng nhập và kiểm tra quyền ở cả truy vấn danh sách lẫn thao tác bằng mã dữ liệu.
-- Tài khoản đầu tiên nhận dữ liệu cũ trong một transaction. Tên chuẩn hóa của môn được đặt trong phạm vi giáo viên để cho phép hai giáo viên có cùng tên môn.
-- `ExamServer.openExam`, `stopIfIdle` và việc tham gia dùng chung khóa đọc/ghi. Mở đề và dừng không chạy chồng nhau; đã mở đề thì chặn dừng trong toàn bộ thời gian ca thi, kể cả chưa ai tham gia hoặc mọi người nộp sớm.
-- Đăng xuất đóng các kết nối và cửa sổ của phiên cũ; tác vụ giao diện cũ không cập nhật sang phiên giáo viên mới. Danh sách sinh viên/khóa học viên vẫn dùng chung.
+`CourseClass` có mã, tên, môn, học kỳ và chủ sở hữu. `ClassStudent` nối nhiều lớp với nhiều sinh viên, duy nhất `(class_id,student_id)`. `Student.studentCode` là định danh dùng chung trên cùng database. Ngày sinh dùng để xác thực theo danh sách CSV.
 
-## Trạng thái phiên và xử lý vi phạm
+CSV nhà trường có năm cột STT / MSV / Họ và tên / Ngày sinh / Lớp; ngày theo dd/MM/yyyy và chấp nhận dấu phân cách phẩy hoặc chấm phẩy. `ClassStudent.csv_ordinal` nullable lưu đúng STT theo từng lớp; re-import có thể cập nhật STT, kể cả hoán đổi hai STT trong một transaction. Service khóa lớp và kiểm tra toàn bộ STT sau nhập trước khi ghi; không tự đánh lại số. `Student.regularClass` lưu lớp chính quy, tách biệt với `CourseClass` là lớp học phần/nhóm thi. Mẫu ba cột cũ vẫn được hỗ trợ; phải bổ sung STT để chia ca. Hồ sơ chưa có regularClass được bổ sung khi nhập; hồ sơ đã có lớp khác sẽ báo xung đột để tránh ghi đè thông tin dùng chung.
 
-- `ClientSession` giữ trạng thái kèm mã lượt và tên đề; đăng nhập mới là `ONLINE`, không suy từ lịch sử điểm.
-- `SessionRegistry` chỉ nhận cập nhật đề từ handler đang sở hữu phiên đó. Đổi đợt thi đưa phiên đã nộp về `ONLINE`; tham gia/làm lại chuyển `DOING_EXAM`.
-- Tác vụ chấm quá hạn đồng thời cập nhật phiên đang làm sang `SUBMITTED` và gửi kết quả về Client còn kết nối.
-- `StudentSessionTable` hiển thị đề gắn với trạng thái và nút gửi cảnh báo/khóa cho từng sinh viên.
-- `AuthService` lưu khóa/lý do trong `students`; `ClientHandler` kiểm tra khóa khi đăng nhập và trước yêu cầu đã xác thực.
-- `ExamServer` gửi cảnh báo đến đúng handler; khóa được lưu trước khi gửi thông báo ngắt phiên. `LockedAccountManager` cho phép giảng viên mở khóa tài khoản offline.
-- Khóa giữ nguyên kết quả và các lựa chọn hiện tại trong RAM để chấm hết giờ. Vào lại làm bài trống theo hạn chung.
+`RosterCsv` đọc UTF-8/BOM và cột có ngoặc kép/dấu phẩy. `ClassService.preview` chỉ đọc; `importRoster` kiểm tra lại và ghi nguyên transaction. Hồ sơ trùng mã nhưng khác tên/ngày sinh chặn cả lần nhập.
 
-## Ngân hàng câu hỏi và tạo đề
+`ClassManager` chỉ quản lý danh sách lớp/sinh viên và trạng thái kết nối. Ngân hàng, đề và kết quả truy cập ở các trang riêng để giảm tầng điều hướng.
 
-- `Subject` lưu môn học; tên môn được chuẩn hóa khoảng trắng và chữ hoa/thường để tránh tạo trùng.
-- `BankQuestion` thuộc một môn, có độ khó 1–6, bốn lựa chọn trắc nghiệm và một đáp án đúng.
-- `QuestionBankService` chỉ lưu/sửa câu trắc nghiệm và lọc theo môn, độ khó; giao diện chỉ gọi database qua service trên máy giảng viên.
-- `ExamService.createExamFromBank` xác thực các mã câu đã chọn trong một transaction, chỉ cho phép cùng môn và không trùng mã.
-- Câu điền và đề chứa câu điền đã lưu từ phiên bản cũ vẫn được giữ trong database để đọc lịch sử, nhưng không được chọn để tạo hoặc mở đề mới.
-- `Exam` giữ môn thi; các `Question` trong đề là bản sao độc lập từ ngân hàng, giữ thứ tự chọn, mã nguồn và độ khó.
-- Khi mở đợt thi, đề và metadata tiếp tục được sao chép để sửa ngân hàng không ảnh hưởng nội dung, đáp án hoặc kết quả đã có.
-- Client nhận tên môn và câu hỏi của đợt thi, không nhận đáp án đúng hay ngân hàng câu hỏi.
+## Ngân hàng, đề mẫu và ca thi
 
-## Thời gian chung, bài trống khi vào lại và đóng Server
+- `Subject`, `BankQuestion`: câu trắc nghiệm theo môn, độ khó 1–6.
+- `Exam` không có `templateExamId`: đề mẫu, dùng lại giữa các lớp.
+- `ExamShiftService` chia theo `csv_ordinal` tăng dần, tối đa N sinh viên/ca (mặc định UI 30); chặn STT thiếu/trùng và lớp không thuộc giáo viên. Không lấy thứ tự dòng CSV, MSV hay thứ tự sắp bảng làm STT.
+- Hai bảng `exam_shifts` và `exam_shift_students` lưu đợt (`batch_key`), số ca, sinh viên và STT tại thời điểm chia. Nhập CSV sau đó không đổi danh sách ca. Chưa bắt đầu có thể chia lại; đã bắt đầu phải hoàn tất cả đợt trước khi tạo đợt mới. Danh sách có lượt thi được giữ làm lịch sử.
+- `Exam` có `templateExamId`, `courseClass` và tùy chọn `shift_id`: một lượt thi, giữ bản sao câu hỏi và hạn chung. `shift_id` duy nhất: mỗi ca đã chia chỉ mở một lượt; lớp chưa chia vẫn có lượt cả lớp.
+- `ExamOrganizer` cho chọn lớp/ca/đề và tải danh sách trước khi bắt đầu. Chuẩn bị là trạng thái giao diện; chưa tạo lượt hoặc tính giờ.
+- Bắt đầu gọi `ExamServer.openExam(template,classId,shiftId)` rồi `ExamService.activateExam`. Service khóa giáo viên/lớp, xác thực quyền, môn học, ca thuộc đợt hiện hành và ca đang diễn ra trước khi sao chép đề, gắn lớp/ca và lưu deadline.
+- Một Server hiện có một giảng viên và một ca thi đang diễn ra. Mở lại đúng ca còn hạn giữ deadline; ca sau tạo ID mới.
+- `findOffer` kiểm tra cả thành viên lớp lẫn danh sách ca; `startAttempt` kiểm tra lại khi cấp đề. Biết mã lượt thi không cấp quyền tham gia. Tiêu đề thông báo, bài thi và kết quả kèm số ca, dùng giao thức Client hiện có.
 
-- `Exam.openedAt` và `deadlineAt` lưu thời điểm giảng viên mở đề và hạn kết thúc chung. Mọi `ExamAttempt` dùng cùng hạn; không gia hạn khi vào muộn hoặc vào lại.
-- Client gửi `ANSWER_UPDATE` ngay khi đổi lựa chọn. `ExamService` chỉ giữ lựa chọn trong RAM, gắn với mã lượt của đúng học viên; không ghi nháp vào database, không gửi lại đáp án cho Client.
-- `startAttempt` xóa lựa chọn của lượt cũ khi học viên vào làm lại. Client luôn dựng bài trống, không giữ đáp án sau mất kết nối.
-- Tác vụ mỗi giây chấm những lượt hết hạn từ RAM, lưu kết quả cuối vào MySQL và gửi điểm cho Client online. Học viên offline cũng được chấm; nếu Server mất điện, lựa chọn chưa nộp trong RAM không được khôi phục.
-- Nút X được chặn bằng cùng kiểm tra database/khóa tham gia như nút Dừng Server. Ca còn hạn khiến thao tác bị từ chối. Sau hạn, phải xử lý hết đáp án tới đúng giờ và lưu điểm xong mới được đóng kết nối.
-- Các cột thời gian mới nullable để giữ dữ liệu cũ. Khi mở lại đợt cũ chưa có thời gian chung, lấy thời điểm tham gia sớm nhất làm mốc; không đọc cột nháp cũ.
+## Tạo đề nhanh và mã đề
 
-## Thông điệp chờ xử lý và gửi dữ liệu
+`QuestionBankService.drawQuestions` kiểm tra phạm vi môn, ma trận mức 1–6 và tổng 1–200 câu, rút không hoàn lại bằng SecureRandom. Danh sách loại trừ hỗ trợ đổi từng câu cùng mức. Đây là thao tác đọc; `ExamEditorDialog` xem trước và kết hợp sửa thủ công, `createExamFromBank` tiếp tục chụp câu hỏi khi lưu đề mẫu.
 
-- `RequestReceipt` đăng ký dấu thời gian Server ngay sau khi đọc trọn dòng JSON, trước khi parse/chờ semaphore. Chỉ ANSWER_UPDATE và SUBMIT_EXAM của phiên đã đăng nhập giữ receipt trong thời gian chờ xử lý.
-- Tác vụ chấm khóa lượt và kiểm tra receipt trước hạn của đúng sinh viên/đợt. Nếu còn receipt, lượt được hoãn đến vòng sau; đáp án xử lý muộn vẫn xét theo thời điểm nhận. Receipt được giải phóng cả khi lỗi hoặc đóng kết nối.
-- `ClientWriter` dùng virtual thread riêng cho từng socket, hàng đợi tối đa 64 thông điệp và 16 Mi ký tự chờ. Lệnh send chỉ xếp hàng; ghi socket bị kẹt quá 10 giây hoặc tràn hàng đợi sẽ đóng riêng kết nối đó. Thông báo khóa tài khoản được flush trước khi đóng.
-- `LanClient` chỉ khóa trạng thái để lấy kết nối hiện tại, rồi khóa riêng writer của kết nối khi gửi trọn thông điệp. Đóng/đăng xuất đóng trực tiếp socket mà không chờ khóa ghi; socket đóng sẽ giải phóng lệnh gửi đang kẹt. Luồng đọc cũ chỉ được đóng đúng kết nối của nó khi kết thúc.
-- `ASSIGNMENT_SUBMIT` truyền dấu thời gian nhận đủ thông điệp từ luồng đọc vào `AssignmentService`; không cần giữ receipt chờ chấm thi. Cả xét hạn và `submittedAt` dùng mốc nhận này, kể cả nộp lại hoặc chờ khóa dòng database. Tới đúng hoặc sau hạn bị từ chối; payload Client không có trường tự khai thời gian nộp.
-- Offer và đề mang deadlineEpochMillis/serverTimeEpochMillis. Client dùng chênh lệch thời gian Server và đồng hồ đơn điệu để đếm xuống, không phụ thuộc giờ hệ thống máy học sinh. Hết hạn thì nút tham gia bị khóa; Server thu hồi offer.
+`activateExam(template,class,shift,variantCount)` vẫn tạo một round và một bộ câu hỏi snapshot chung. Với 2–8 mã, `ExamVariants` sinh các bố cục khác nhau, đảo thứ tự questionId và hoán vị vị trí bốn lựa chọn; chia ngẫu nhiên cân bằng mã 101–108 cho danh sách sinh viên lớp/ca. Round lưu JSON `variants_json` MEDIUMTEXT nullable gồm bố cục và bảng phân mã, không thêm bảng/copy nội dung cho từng mã. Ca một mã và dữ liệu cũ có JSON null dùng thứ tự gốc.
 
-Luồng đọc TCP và luồng xử lý FIFO của từng Client được tách riêng. Luồng đọc tiếp tục đóng dấu thời gian cho các thông điệp hoàn chỉnh khi yêu cầu trước đang chờ slot; hàng đợi vào giới hạn 64 thông điệp/16 Mi ký tự. Khi đầu vào EOF hoặc ghi thất bại, các thông điệp đã nhận được xử lý hết trước khi xóa phiên. Dừng cưỡng bức hoặc thay phiên đăng nhập mới vẫn hủy phiên cũ.
+`ExamAttempt.variant_code` cố định khi tham gia. `toDto(attempt)` áp dụng bố cục và kèm mã trong title; questionId và cấu trúc TCP hiện có được giữ nguyên. Đáp án nháp là chữ theo vị trí Client đã thấy. Khi nộp/hết giờ, Server ánh xạ chữ đó về lựa chọn gốc trước khi so đáp án; `StudentAnswer.answerText` lưu chữ Client đã chọn và `Submission.variant_code` lưu mã để đối chiếu. Mã được xuất trong bảng điểm/CSV và lịch sử. Không gửi JSON phân mã hay đáp án đúng sang Client.
+
+`positionalOptions` giữ nguyên A–D khi phát hiện một số mẫu tham chiếu vị trí tiếng Việt/Anh phổ biến. Bộ sinh kiểm tra số bố cục khả dụng khi mọi câu đều phải giữ lựa chọn và từ chối nếu không đủ mã khác nhau. Đây là nhận diện mẫu văn bản; người soạn cần tránh tham chiếu phụ thuộc thứ tự câu hoặc các cách viết vị trí ngoài mẫu.
+
+`findOffer` và `startAttempt` chặn người không có trong bảng phân mã, kể cả mới được thêm vào lớp sau khi ca nhiều mã đã mở. Phân mã được lưu cùng transaction mở ca, không phụ thuộc số thứ tự người đăng nhập, RAM hay seed được Client khai báo. Mở lại ca cùng số mã không sinh lại bố cục; đổi số mã khi đang thi bị từ chối.
+
+## Nhập câu hỏi Word
+
+`QuestionWordImport` chỉ đọc `word/document.xml` bằng ZIP/StAX của JDK. Tệp tối đa 5 MB, phần XML sau giải nén tối đa 4 MB, tối đa 500 câu. DTD và external entities bị tắt. Trình đọc ghép các run và xuống dòng trong Word, nhận tiêu đề MỨC 1–6, Câu n:, A.–D. và Đáp án: A–D. Nội dung không hỗ trợ (bảng/ảnh/công thức, đánh số tự động, chỉnh sửa chưa chấp nhận) tạo lỗi chặn nhập, tránh bỏ sót nội dung mà vẫn báo thành công.
+
+`QuestionBankService.previewWord` kiểm tra quyền môn và phân loại mới/trùng/lỗi, không ghi dữ liệu. `importWord` khóa môn, kiểm tra lại, bỏ qua câu trùng hoàn toàn và lưu nguyên transaction vào `BankQuestion`. Việc nhập không sửa câu có sẵn hay ảnh chụp đề thi. `QuestionWordPreviewDialog` hiện danh sách và đầy đủ lựa chọn ở vùng chi tiết; chỉ cho xác nhận khi không có lỗi và còn câu mới. Mẫu `.docx` được đóng gói dưới `/templates/` và tải bằng nút trong `QuestionBankBrowser`.
+
+## Lưu đáp án và khôi phục
+
+`ExamAttempt` duy nhất `(student_id,exam_id)` giữ thời điểm bắt đầu, deadline, submittedAt và `saved_answers_json` nullable. Không thêm bảng nháp riêng.
+
+`ANSWER_UPDATE` chứa toàn bộ lựa chọn hiện tại. Service khóa lượt, kiểm tra thời điểm Server nhận và mã câu rồi lưu JSON trong transaction. Chỉ người đã xác thực có lượt làm phù hợp mới cập nhật được.
+
+Vào lại dùng cùng lượt/deadline. `ExamDto.savedAnswers` chứa riêng lựa chọn đã lưu của lượt đó; `ClientApp` dựng lựa chọn trước khi gắn listener để không gửi lại ảnh chụp còn thiếu trong lúc dựng giao diện. DTO câu hỏi không chứa đáp án đúng.
+
+Hết giờ dùng JSON đã lưu để chấm; không phụ thuộc RAM của tiến trình hoặc trạng thái kết nối. Sau khi lưu Submission/StudentAnswer và đánh dấu submitted, dữ liệu nháp được xóa khỏi lượt. Gửi nộp lại trả cùng kết quả.
+
+## Thời gian, hàng đợi và kết nối
+
+- Client dùng deadlineEpochMillis/serverTimeEpochMillis và đồng hồ đơn điệu để đếm thời gian còn lại.
+- Luồng đọc đóng dấu nhận khi có đủ frame, trước parse/chờ slot. `RequestReceipt` giữ thông điệp đáp án/nộp trước hạn trong khi chờ xử lý.
+- Chấm quá hạn khóa lượt và hoãn nếu còn receipt đúng hạn. Nhận sau hạn không sửa kết quả.
+- EOF/ghi lỗi vẫn xử lý các frame hoàn chỉnh đã nhận trước khi xóa phiên. Thay phiên đăng nhập hủy handler cũ.
+- Hàng đợi vào tối đa 64 frame/16 Mi ký tự; các yêu cầu dùng semaphore giới hạn truy cập DB.
+- `ClientWriter` có hàng đợi riêng, timeout ghi 10 giây và giới hạn dữ liệu; Client chậm không giữ luồng chấm điểm.
+- Mở ca/tham gia/dừng dùng khóa đọc/ghi trong ExamServer. Không dừng, đóng cửa sổ hay đổi giáo viên khi ca còn hạn hoặc đang hoàn tất chấm.
+
+## Theo dõi, xử lý vi phạm và bảng điểm
+
+`SessionRegistry` ánh xạ studentCode sang handler/IP/trạng thái của phiên hiện hành. `ExamOrganizer` ghép với danh sách lớp để hiện cả người chưa kết nối; không coi offline là kết luận vắng thi.
+
+Cảnh báo gửi đúng handler. Khóa tài khoản được lưu trước khi ngắt kết nối; đáp án đã nhận vẫn lưu để chấm. Nút Mở khóa SV ở thanh tài khoản thao tác trên database.
+
+`ExamResultsPane` chỉ trình bày kết quả trắc nghiệm, lọc theo classId/roundId và chụp danh sách đang lọc để xuất. `ExamResultsCsv` tạo UTF-8/BOM, escape CSV và vô hiệu hóa tiền tố công thức ở ô văn bản khi mở bằng bảng tính.
+
+## Dữ liệu cũ
+
+Lớp, hồ sơ, đề và kết quả cũ giữ nguyên. Chỉ giữ hai mapping đọc bảng thực hành trong `server/legacy/entity`; service, UI, DTO và giao thức thực hành đã được bỏ. Tab Đề thi dùng `ExamTemplateManager`; tiện ích giao diện chung là `UiSupport`. Cột saved_answers_json là nullable để cập nhật schema hiện có. Lượt cũ chưa có đáp án lưu được hiểu là chưa trả lời.
+
+## Khôi phục và bảng theo dõi
+
+TCP Server nạp ca còn hạn của đúng giảng viên trước khi nhận đăng nhập. Người chưa vào bài vẫn nhận offer; ID lượt, deadline và mã đề không đổi. `ExamOrganizer` tách Online/Offline từ phiên mạng khỏi tiến độ đọc qua `ExamService.roundProgress(classId, shiftId)`, tự cập nhật khoảng 2 giây. Bài đã nộp giữ trạng thái khi offline/vào lại; người chưa tham gia sau hạn là Vắng thi.

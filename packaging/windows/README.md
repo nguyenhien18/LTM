@@ -2,7 +2,7 @@
 
 ## File gửi cho học viên
 
-`dist/LANExamClient.exe` là file duy nhất cần gửi. Bản này dành cho Windows 10/11 64 bit.
+`dist/current/LANExamClient.exe` là file duy nhất cần gửi. Bản này dành cho Windows 10/11 64 bit.
 Học viên mở EXE, ứng dụng hiện giao diện đăng nhập; nhập IP Server, cổng, mã sinh viên và ngày sinh như khi chạy Client từ Maven.
 
 Lần đầu EXE tự chuẩn bị Java runtime và JavaFX trong `%LOCALAPPDATA%\LANExamClient\runtime`.
@@ -22,8 +22,8 @@ Script tìm Maven trong PATH hoặc bộ nhớ đệm Maven Wrapper. Có thể t
 
 Kết quả:
 
-- `dist/LANExamClient.exe`: ứng dụng tự giải nén, kèm runtime.
-- `dist/LANExamClient.exe.sha256`: mã kiểm tra của file phát hành.
+- `dist/current/LANExamClient.exe`: ứng dụng tự giải nén, kèm runtime.
+- `dist/current/LANExamClient.exe.sha256`: mã kiểm tra của file phát hành.
 - `target/client-exe/<lần đóng gói>/build-info.json`: thông tin và thư mục trung gian.
 
 Chỉ các class `client`, `common`, JavaFX và Jackson được đưa vào Client. Không kèm lớp Server, driver MySQL, Hibernate, cấu hình database hoặc dữ liệu tài khoản giáo viên.
