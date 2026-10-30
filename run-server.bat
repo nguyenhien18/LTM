@@ -16,5 +16,7 @@ if /I "%~1"=="--check" (
     call "%LAN_MAVEN%" -version
     exit /b
 )
-call "%LAN_MAVEN%" javafx:run -Pserver
+rem Keep the running Server's classes separate from Client builds and tests.
+set "LAN_SERVER_BUILD=output/server-runtime/%RANDOM%-%RANDOM%-%RANDOM%"
+call "%LAN_MAVEN%" "-Dlanexam.build.directory=%LAN_SERVER_BUILD%" compile javafx:run -Pserver
 pause

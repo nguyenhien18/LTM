@@ -33,6 +33,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 public class ClientApp extends Application {
+    private static final DateTimeFormatter BIRTH_DATE_INPUT = DateTimeFormatter.ofPattern("d/M/uuuu")
+            .withResolverStyle(java.time.format.ResolverStyle.STRICT);
+    private static final DateTimeFormatter BIRTH_DATE_DISPLAY = DateTimeFormatter.ofPattern("dd/MM/uuuu");
     private final LanClient client = new LanClient();
     private final Map<Long, Supplier<String>> answerSuppliers = new LinkedHashMap<>();
     private final ExecutorService outbound = Executors.newSingleThreadExecutor(r -> {
@@ -115,6 +118,15 @@ public class ClientApp extends Application {
         studentCodeField.setPromptText("Ví dụ: B21DCCN001");
         DatePicker birthDatePicker = new DatePicker();
         birthDatePicker.setId("login-birth-date");
+        birthDatePicker.setPromptText("dd/MM/yyyy");
+        birthDatePicker.setConverter(new javafx.util.StringConverter<>() {
+            @Override public String toString(LocalDate date) {
+                return date == null ? "" : BIRTH_DATE_DISPLAY.format(date);
+            }
+            @Override public LocalDate fromString(String text) {
+                return text == null || text.isBlank() ? null : LocalDate.parse(text.strip(), BIRTH_DATE_INPUT);
+            }
+        });
         Button loginButton = new Button("Kết nối và đăng nhập");
         loginButton.setId("login-connect");
         loginButton.getStyleClass().add("primary");
@@ -152,8 +164,8 @@ public class ClientApp extends Application {
         loginButton.setOnAction(e -> {
             connectionVersion++;
             String host = hostField.getText().trim();
-            String code = studentCodeField.getText().trim().toUpperCase();
-            LocalDate birthDate = birthDatePicker.getValue();
+            String code = studentCodeField.getText().strip().toUpperCase(Locale.ROOT);
+            String birthDateText = birthDatePicker.getEditor().getText().strip();
             int port;
             try {
                 port = Integer.parseInt(portField.getText().trim());
@@ -161,8 +173,18 @@ public class ClientApp extends Application {
                 showAlert(Alert.AlertType.ERROR, "Port không hợp lệ", "Port phải là số nguyên.");
                 return;
             }
-            if (host.isBlank() || code.isBlank() || birthDate == null) {
-                showAlert(Alert.AlertType.ERROR, "Thiếu dữ liệu", "Vui lòng nhập đủ IP, mã sinh viên và ngày sinh.");
+            if (host.isBlank() || code.isBlank() || birthDateText.isBlank()) {
+                String missing = host.isBlank() ? "địa chỉ Server" : code.isBlank() ? "mã sinh viên" : "ngày sinh";
+                showAlert(Alert.AlertType.ERROR, "Thiếu dữ liệu", "Chưa nhập " + missing + ".");
+                return;
+            }
+
+            final LocalDate birthDate;
+            try {
+                birthDate = LocalDate.parse(birthDateText, BIRTH_DATE_INPUT);
+                birthDatePicker.setValue(birthDate);
+            } catch (java.time.format.DateTimeParseException ex) {
+                showAlert(Alert.AlertType.ERROR, "Ngày sinh không hợp lệ", "Nhập ngày sinh theo dd/MM/yyyy, ví dụ 25/05/2005.");
                 return;
             }
 
@@ -221,6 +243,10 @@ public class ClientApp extends Application {
                         showModerationNotice(message.getPayload().asText(), true);
                     }
                     case ERROR -> {
+                        if (stage.getScene().lookup("#login-connect") != null) {
+                            rejectLogin(message.getPayload().asText());
+                            return;
+                        }
                         if (currentExam != null && submitButton != null) {
                             submitButton.setDisable(false);
                             submitButton.setText("Nộp bài thi");
@@ -240,9 +266,7 @@ public class ClientApp extends Application {
 
     private void handleLoginResult(LoginResponse response) {
         if (!response.isSuccess()) {
-            showAlert(Alert.AlertType.ERROR, "Đăng nhập thất bại", response.getMessage());
-            client.close();
-            showLoginScene();
+            rejectLogin(response.getMessage());
             return;
         }
 
@@ -253,6 +277,15 @@ public class ClientApp extends Application {
         startHeartbeat();
         showDashboard();
 
+    }
+
+    private void rejectLogin(String message) {
+        connectionVersion++;
+        client.close();
+        Button login = (Button) stage.getScene().lookup("#login-connect");
+        if (login != null) login.setDisable(false);
+        connectionLabel.setText("Đăng nhập thất bại");
+        showAlert(Alert.AlertType.ERROR, "Đăng nhập thất bại", message);
     }
 
     private void showDashboard() {
@@ -632,6 +665,8 @@ public class ClientApp extends Application {
 
     private void showAlert(Alert.AlertType type, String title, String message) {
         Alert alert = new Alert(type);
+        alert.initOwner(stage);
+        alert.getDialogPane().setId("client-alert");
         AppUi.desktopStyle(alert.getDialogPane());
         alert.setTitle(title);
         alert.setHeaderText(title);

@@ -17,6 +17,7 @@
         <hibernate.version>6.6.5.Final</hibernate.version>
         <junit.version>5.11.4</junit.version>
         <app.mainClass>com.ptit.lanexam.client.ClientApp</app.mainClass>
+        <lanexam.build.directory>target</lanexam.build.directory>
     </properties>
 
     <dependencies>
@@ -74,6 +75,7 @@
     </dependencies>
 
     <build>
+        <directory>${lanexam.build.directory}</directory>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

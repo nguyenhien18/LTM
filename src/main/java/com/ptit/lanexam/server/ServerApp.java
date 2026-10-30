@@ -285,13 +285,20 @@ public class ServerApp extends Application {
         Thread thread = new Thread(() -> {
             try {
                 if (version != workspaceVersion) return;
-                ExamServer candidate = new ExamServer(registry, currentAuth, currentExams);
+                ExamServer candidate = new ExamServer(registry, currentAuth, currentExams,
+                        failure -> Platform.runLater(() -> {
+                            if (version != workspaceVersion) return;
+                            markServerStopped();
+                            statusLabel.setText("Server lỗi nhận kết nối. Hãy đóng và chạy lại run-server.bat.");
+                            showError("Server đã dừng nhận kết nối",
+                                    failure.toString() + "\nĐóng cửa sổ Server và chạy lại run-server.bat để nạp bản mới.");
+                        }));
                 server = candidate;
                 candidate.start(requestedPort);
                 if (version != workspaceVersion) { candidate.stop(); return; }
                 String connectionInfo = ServerAddress.connectionInfo(candidate.getPort());
                 Platform.runLater(() -> {
-                    if (version != workspaceVersion) return;
+                    if (version != workspaceVersion || !candidate.isRunning()) return;
                     logoutButton.setDisable(false);
                     statusLabel.setText("Server đang chạy tại cổng " + candidate.getPort());
                     connectionState.setText("Server đang chạy • " + candidate.getPort());

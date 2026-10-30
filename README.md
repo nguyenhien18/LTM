@@ -22,6 +22,8 @@ Một Server phục vụ **một giảng viên và một ca đang diễn ra tạ
 
 Server và Client dùng chung giao diện tông xám, menu bên trái và bảng dữ liệu có hàng/cột rõ ràng. Trong **Ngân hàng câu hỏi**, bấm nội dung câu để mở hộp chỉnh sửa. Trong cửa sổ tạo đề, bấm câu ở bảng ngân hàng hoặc bảng câu đã chọn để xem chi tiết; các thao tác tạo/sửa/nhập câu hỏi nằm ở trang ngân hàng riêng.
 
+Trong **Lớp & sinh viên**, gõ tên hoặc MSV vào ô tìm kiếm để lọc ngay trong lớp đang chọn, không phân biệt hoa/thường và dấu tiếng Việt. Cột **Kết nối hiện tại** chỉ hiển thị Đang kết nối / Chưa kết nối; trạng thái làm bài và nộp bài được xem theo từng ca trong **Tổ chức thi** và **Kết quả**.
+
 ## Yêu cầu môi trường
 
 - JDK **21** và Maven **3.9+** trên máy chạy từ mã nguồn.
@@ -45,8 +47,10 @@ $env:DB_PASSWORD = "mat_khau_MySQL_thuc_te"
 Hoặc dùng Maven trực tiếp:
 
 ```powershell
-mvn javafx:run -Pserver
+mvn "-Dlanexam.build.directory=output/server-runtime/manual" compile javafx:run -Pserver
 ```
+
+`run-server.bat` biên dịch vào thư mục riêng cho từng lần chạy trong `output/server-runtime`. Nhờ đó build Client hoặc chạy kiểm thử không thay các lớp Java mà Server đang sử dụng. Khi cập nhật mã nguồn, đóng cửa sổ Server rồi chạy lại script để nạp bản mới; không chạy hai Server cùng cổng.
 
 URL mặc định: `jdbc:mysql://localhost:3306/lan_exam` với các tùy chọn kết nối trong `JpaUtil`. Có thể đặt `DB_URL` để dùng cấu hình khác. Hibernate hiện dùng `update` để bổ sung bảng/cột; sao lưu database thật trước khi cập nhật phiên bản.
 
@@ -76,6 +80,8 @@ mvn javafx:run -Pclient
 ```
 
 Nhập IP của máy giảng viên, cổng 5000, MSV và ngày sinh đúng danh sách CSV. `127.0.0.1` chỉ dùng khi Client và Server chạy cùng máy. Client không cần MySQL hoặc các biến `DB_*`.
+
+Ngày sinh có thể chọn bằng lịch hoặc gõ theo `dd/MM/yyyy`. Nếu đăng nhập thất bại, có thể sửa dữ liệu và thử lại ngay. Sinh viên phải thuộc ít nhất một lớp của giảng viên đang mở Server.
 
 ## Quy trình tổ chức thi
 

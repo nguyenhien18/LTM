@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 
 public class ExamServer {
     private final SessionRegistry registry;
@@ -37,11 +38,18 @@ public class ExamServer {
     private volatile boolean running;
     private volatile Long publishedExamId;
     private volatile long publishedDeadline;
+    private final Consumer<Throwable> failureListener;
 
     public ExamServer(SessionRegistry registry, AuthService authService, ExamService examService) {
+        this(registry, authService, examService, failure -> {});
+    }
+
+    public ExamServer(SessionRegistry registry, AuthService authService, ExamService examService,
+                      Consumer<Throwable> failureListener) {
         this.registry = registry;
         this.authService = authService;
         this.examService = examService;
+        this.failureListener = failureListener;
     }
 
     public synchronized void start(int port) throws IOException {
@@ -66,25 +74,41 @@ public class ExamServer {
     }
 
     private void acceptLoop() {
-        while (running) {
-            try {
+        Throwable failure = null;
+        try {
+            while (running) {
                 Socket socket = serverSocket.accept();
-                socket.setKeepAlive(true);
-                socket.setSoTimeout(20000);
                 try {
-                    ClientHandler handler = new ClientHandler(socket, registry, authService, examService,
-                            () -> publishedExamId, attemptGate, () -> running, requestSlots);
-                    connections.add(handler);
-                    try {
-                        clientPool.execute(() -> { try { handler.run(); } finally { connections.remove(handler); } });
-                    } catch (RejectedExecutionException ex) { connections.remove(handler); throw ex; }
-                } catch (RejectedExecutionException e) {
-                    socket.close();
+                    socket.setKeepAlive(true);
+                    socket.setSoTimeout(20000);
+                    dispatchClient(socket);
+                } catch (IOException | RejectedExecutionException e) {
+                    try { socket.close(); } catch (IOException ignored) {}
+                    if (running) e.printStackTrace();
+                } catch (RuntimeException | Error e) {
+                    try { socket.close(); } catch (IOException ignored) {}
+                    throw e;
                 }
-            } catch (IOException e) {
-                if (running) System.err.println("Accept error: " + e.getMessage());
+            }
+        } catch (IOException | RuntimeException | Error e) {
+            if (running) { failure = e; e.printStackTrace(); }
+        } finally {
+            // A bound port without an accept loop looks connected to Clients but
+            // can never answer LOGIN. Release it and report the failed Server.
+            if (running) {
+                stop();
+                if (failure != null) failureListener.accept(failure);
             }
         }
+    }
+
+    void dispatchClient(Socket socket) {
+        ClientHandler handler = new ClientHandler(socket, registry, authService, examService,
+                () -> publishedExamId, attemptGate, () -> running, requestSlots);
+        connections.add(handler);
+        try {
+            clientPool.execute(() -> { try { handler.run(); } finally { connections.remove(handler); } });
+        } catch (RuntimeException | Error e) { connections.remove(handler); throw e; }
     }
 
     public int publishExam(ExamDto exam) {

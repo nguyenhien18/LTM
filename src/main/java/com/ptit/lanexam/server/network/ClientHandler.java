@@ -156,7 +156,7 @@ public class ClientHandler implements Runnable {
                 : authService.authenticate(request.getStudentCode(), request.getBirthDate());
         if (student.isEmpty()) {
             send(JsonUtil.message(MessageType.LOGIN_RESULT,
-                    new LoginResponse(false, "Sai mã sinh viên hoặc ngày sinh", null)));
+                    new LoginResponse(false, "MSV/ngày sinh không khớp hoặc sinh viên chưa thuộc lớp của giảng viên đang mở Server. Kiểm tra hồ sơ tại Lớp & sinh viên.", null)));
             return;
         }
 

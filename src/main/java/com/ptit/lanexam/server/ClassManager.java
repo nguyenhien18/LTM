@@ -4,12 +4,16 @@ import com.ptit.lanexam.common.ui.*;
 import com.ptit.lanexam.server.network.ClientSessionInfo;
 import com.ptit.lanexam.server.service.*;
 import javafx.collections.*;
+import javafx.collections.transformation.FilteredList;
+import javafx.collections.transformation.SortedList;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.text.Normalizer;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 
 /** Local teacher workspace. Roster files never leave the LAN server. */
@@ -21,6 +25,9 @@ public final class ClassManager extends BorderPane {
     private final Runnable changed;
     private final ComboBox<ClassInfo> classes = new ComboBox<>();
     private final TableView<ClassService.RosterStudent> roster = new TableView<>();
+    private final ObservableList<ClassService.RosterStudent> allStudents = FXCollections.observableArrayList();
+    private final FilteredList<ClassService.RosterStudent> filteredStudents = new FilteredList<>(allStudents);
+    private final TextField search = new TextField();
     private final Label message = AppUi.label("Tạo lớp rồi nhập danh sách sinh viên bằng CSV UTF-8.", "muted");
     private final Label detail = AppUi.label("Chưa chọn lớp", "section-title");
     private final Button importCsv = new Button("Nhập danh sách CSV");
@@ -38,7 +45,7 @@ public final class ClassManager extends BorderPane {
         setId("class-manager");
         classes.setId("class-selector"); classes.setPromptText("Chọn lớp học phần"); classes.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(classes, Priority.ALWAYS);
-        classes.valueProperty().addListener((o, a, b) -> loadRoster());
+        classes.valueProperty().addListener((o, a, b) -> { search.clear(); loadRoster(); });
         Button create = new Button("Tạo lớp"); create.setId("class-create"); create.getStyleClass().add("primary");
         create.setOnAction(e -> run("load-class-subjects", bank::listSubjects, this::createClass));
         importCsv.setId("class-import"); importCsv.setOnAction(e -> chooseCsv());
@@ -49,7 +56,20 @@ public final class ClassManager extends BorderPane {
         ordinalHelp.setVisible(false); ordinalHelp.setManaged(false);
         Button sample = new Button("Tải CSV mẫu"); sample.setOnAction(e -> saveSample());
         Button refresh = new Button("Làm mới"); refresh.setId("class-refresh"); refresh.setOnAction(e -> reload(null));
+        search.setId("class-student-search");
+        search.setPromptText("Tìm theo tên hoặc mã sinh viên");
+        search.setPrefWidth(340);
+        search.textProperty().addListener((o, previous, value) -> {
+            String query = searchText(value);
+            filteredStudents.setPredicate(student -> query.isEmpty()
+                    || searchText(student.code()).contains(query)
+                    || searchText(student.fullName()).contains(query));
+            updateRosterSummary();
+        });
         roster.setId("class-roster");
+        SortedList<ClassService.RosterStudent> sortedStudents = new SortedList<>(filteredStudents);
+        sortedStudents.comparatorProperty().bind(roster.comparatorProperty());
+        roster.setItems(sortedStudents);
         roster.getColumns().add(UiSupport.column("STT", 60, s -> s.ordinal() == null ? "—" : s.ordinal().toString()));
         roster.getColumns().add(UiSupport.column("Mã sinh viên", 170, ClassService.RosterStudent::code));
         var names = UiSupport.<ClassService.RosterStudent>column("Họ và tên", 260, ClassService.RosterStudent::fullName);
@@ -68,21 +88,29 @@ public final class ClassManager extends BorderPane {
         roster.getColumns().add(UiSupport.column("Ngày sinh", 120, s -> RosterCsv.displayDate(s.birthDate())));
         roster.getColumns().add(UiSupport.column("Lớp chính quy", 140, s -> s.regularClass() == null ? "" : s.regularClass()));
         roster.getColumns().add(UiSupport.column("Kết nối hiện tại", 190, s -> sessions.stream()
-                .filter(session -> session.studentCode().equals(s.code())).findFirst()
-                .map(session -> switch (session.status()) {
-                    case "DOING_EXAM" -> "Đang thi trắc nghiệm";
-                    case "SUBMITTED" -> "Đã nộp trắc nghiệm";
-                    default -> "Đang kết nối";
-                }).orElse("Chưa kết nối")));
+                .anyMatch(session -> session.studentCode().equals(s.code()))
+                ? "Đang kết nối" : "Chưa kết nối"));
         roster.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         roster.setPlaceholder(new Label("Lớp chưa có sinh viên. Chọn Nhập danh sách CSV để thêm."));
-        VBox students = new VBox(12, AppUi.toolbar(AppUi.spacer(), sample, importCsv), ordinalHelp, roster, message);
+        VBox students = new VBox(12, AppUi.toolbar(search, AppUi.spacer(), sample, importCsv), ordinalHelp, roster, message);
         VBox.setVgrow(roster, Priority.ALWAYS);
         VBox content = new VBox(14, AppUi.toolbar(classes, create, refresh), detail, students);
         VBox.setVgrow(students, Priority.ALWAYS); setCenter(content);
         sessions.addListener(sessionListener); reload(null);
     }
     public void dispose() { disposed = true; rosterVersion++; sessions.removeListener(sessionListener); }
+    private static String searchText(String value) {
+        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "").replace('đ', 'd').replace('Đ', 'D')
+                .toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").strip();
+    }
+    private void updateRosterSummary() {
+        boolean searching = !searchText(search.getText()).isEmpty();
+        message.setText(searching ? "Hiển thị " + filteredStudents.size() + "/" + allStudents.size() + " sinh viên"
+                : allStudents.size() + " sinh viên");
+        roster.setPlaceholder(new Label(searching ? "Không tìm thấy sinh viên phù hợp."
+                : "Lớp chưa có sinh viên. Chọn Nhập danh sách CSV để thêm."));
+    }
     private void editProfile(ClassInfo group, ClassService.RosterStudent student) {
         Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.desktopStyle(dialog.getDialogPane());
         dialog.setTitle("Sửa hồ sơ sinh viên"); dialog.getDialogPane().setId("student-profile-editor");
@@ -128,12 +156,13 @@ public final class ClassManager extends BorderPane {
     private void loadRoster() {
         ClassInfo c = classes.getValue(); long version = ++rosterVersion;
         ordinalHelp.setVisible(false); ordinalHelp.setManaged(false);
-        importCsv.setDisable(c == null); roster.getItems().clear();
+        importCsv.setDisable(c == null); search.setDisable(c == null); allStudents.clear();
+        updateRosterSummary();
         if (c == null) { detail.setText("Chưa có lớp học phần"); return; }
         detail.setText(c.subjectName() + " · " + c.semester());
         UiSupport.async("load-class-roster", () -> service.roster(c.id()), rows -> {
             if (disposed || version != rosterVersion) return;
-            roster.getItems().setAll(rows); message.setText(rows.size() + " sinh viên");
+            allStudents.setAll(rows); updateRosterSummary();
             long missing = rows.stream().filter(s -> s.ordinal() == null).count();
             ordinalHelp.setVisible(missing > 0); ordinalHelp.setManaged(missing > 0);
             ordinalNotice.setText(missing == 0 ? "" : missing + " sinh viên chưa có STT (hiện —). Nhập lại CSV gốc có cột STT để cập nhật vào danh sách hiện có và chia ca.");

@@ -56,6 +56,104 @@ import static org.junit.jupiter.api.Assertions.*;
 class ExamWorkflowUiTest {
     private static final Instant TIME = Instant.parse("2026-10-20T08:00:00Z");
 
+    @Test
+    void clientRetriesTypedLoginAfterServerErrorAndWrongDateUsingImportedRoster() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver", "jakarta.persistence.jdbc.url", "jdbc:h2:mem:typed_login_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "", "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gv_login", "Giảng viên", "Matkhau123!");
+            var bank = new QuestionBankService(factory::createEntityManager, teacher.id());
+            var subject = bank.createSubject("Lập trình mạng");
+            var classes = new ClassService(factory::createEntityManager, teacher.id());
+            var group = classes.create("LTM-LOGIN", "Lớp đăng nhập", "HK1", subject.id());
+            classes.importRoster(group.id(), RosterCsv.read(Path.of("src/test/resources/fixtures/student-roster-60.csv")));
+            AtomicInteger logins = new AtomicInteger();
+            var auth = new AuthService(factory::createEntityManager, teacher.id()) {
+                @Override public Optional<Student> authenticate(String code, String date) {
+                    if (logins.incrementAndGet() == 1) throw new IllegalStateException("Lỗi kiểm tra tài khoản thử nghiệm");
+                    return super.authenticate(code, date);
+                }
+            };
+            var registry = new SessionRegistry();
+            var server = new ExamServer(registry, auth, new ExamService(factory::createEntityManager, teacher.id()));
+            server.start(0);
+            ClientApp app = new ClientApp();
+            Stage stage = fx(() -> { var s = new Stage(); app.start(s); return s; });
+            try {
+                fx(() -> {
+                    ((TextField) stage.getScene().lookup("#login-port")).setText(Integer.toString(server.getPort()));
+                    ((TextField) stage.getScene().lookup("#login-code")).setText("B23DCCN221");
+                    ((DatePicker) stage.getScene().lookup("#login-birth-date")).getEditor().setText("25/05/2004");
+                    return null;
+                });
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    fx(() -> { ((Button) stage.getScene().lookup("#login-connect")).fire(); return null; });
+                    awaitFx(() -> notice("#client-alert") != null);
+                    final int index = attempt;
+                    fx(() -> {
+                        var pane = notice("#client-alert");
+                        assertEquals("Đăng nhập thất bại", pane.getHeaderText());
+                        assertTrue(pane.getContentText().contains(index == 0 ? "Lỗi kiểm tra" : "MSV/ngày sinh"));
+                        assertFalse(stage.getScene().lookup("#login-connect").isDisabled());
+                        assertEquals("B23DCCN221", ((TextField) stage.getScene().lookup("#login-code")).getText());
+                        assertEquals("25/05/2004", ((DatePicker) stage.getScene().lookup("#login-birth-date")).getEditor().getText());
+                        ((Button) pane.lookupButton(ButtonType.OK)).fire(); return null;
+                    });
+                    awaitFx(() -> notice("#client-alert") == null);
+                }
+                fx(() -> {
+                    ((DatePicker) stage.getScene().lookup("#login-birth-date")).getEditor().setText("25/05/2005");
+                    ((Button) stage.getScene().lookup("#login-connect")).fire(); return null;
+                });
+                awaitFx(() -> stage.getScene().lookup("#join-exam") != null);
+                assertNotNull(registry.find("B23DCCN221"));
+            } finally {
+                fx(() -> { var pane = notice("#client-alert"); if (pane != null) pane.getScene().getWindow().hide(); app.stop(); stage.close(); return null; });
+                server.stop();
+            }
+        }
+    }
+
+    @Test
+    void loginRejectsInvalidOrClearedTypedDateInsteadOfUsingPreviousValue() throws Exception {
+        ClientApp app = new ClientApp();
+        Stage stage = fx(() -> { var s = new Stage(); app.start(s); return s; });
+        try {
+            fx(() -> {
+                ((TextField) stage.getScene().lookup("#login-code")).setText("ST001");
+                ((TextField) stage.getScene().lookup("#login-port")).setText("0");
+                var date = (DatePicker) stage.getScene().lookup("#login-birth-date");
+                assertEquals(LocalDate.of(2005, 5, 25), date.getConverter().fromString("25/05/2005"));
+                assertEquals(LocalDate.of(2004, 2, 29), date.getConverter().fromString("29/02/2004"));
+                assertEquals("25/05/2005", date.getConverter().toString(LocalDate.of(2005, 5, 25)));
+                return null;
+            });
+            for (String input : List.of("31/02/2005", "29/02/2005", "05-25-2005", "")) {
+                fx(() -> {
+                    var date = (DatePicker) stage.getScene().lookup("#login-birth-date");
+                    date.setValue(LocalDate.of(2003, 5, 12));
+                    date.getEditor().setText(input);
+                    Platform.runLater(() -> ((Button) stage.getScene().lookup("#login-connect")).fire());
+                    return null;
+                });
+                awaitFx(() -> notice("#client-alert") != null);
+                fx(() -> {
+                    var pane = notice("#client-alert");
+                    assertEquals(input.isEmpty() ? "Thiếu dữ liệu" : "Ngày sinh không hợp lệ", pane.getHeaderText());
+                    assertFalse(stage.getScene().lookup("#login-connect").isDisabled());
+                    ((Button) pane.lookupButton(ButtonType.OK)).fire();
+                    return null;
+                });
+                awaitFx(() -> notice("#client-alert") == null);
+            }
+        } finally {
+            fx(() -> {
+                var pane = notice("#client-alert"); if (pane != null) pane.getScene().getWindow().hide();
+                app.stop(); stage.close(); return null;
+            });
+        }
+    }
+
     @Test void templateWorkspaceCreatesFiltersAndReloadsOnlyExamTemplates() throws Exception {
         try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
                 "jakarta.persistence.jdbc.driver", "org.h2.Driver",
@@ -496,7 +594,9 @@ class ExamWorkflowUiTest {
                     var s = new Stage(); first.start(s);
                     ((TextField) s.getScene().lookup("#login-port")).setText(Integer.toString(app.getListeningPort()));
                     ((TextField) s.getScene().lookup("#login-code")).setText("ST001");
-                    ((DatePicker) s.getScene().lookup("#login-birth-date")).setValue(LocalDate.of(2003, 5, 12));
+                    DatePicker typedDate = (DatePicker) s.getScene().lookup("#login-birth-date");
+                    typedDate.getEditor().setText("12/05/2003");
+                    assertNull(typedDate.getValue(), "Tái hiện gõ ngày nhưng DatePicker chưa commit giá trị.");
                     ((Button) s.getScene().lookup("#login-connect")).fire(); return s;
                 });
                 awaitFx(() -> students[0].getScene().lookup("#join-exam") != null);
