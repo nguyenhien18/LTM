@@ -24,6 +24,7 @@ final class ExamResultsPane extends BorderPane {
     private final ClassService classes;
     private boolean disposed;
     ExamResultsPane(Window owner, ExamService exams, ClassService classes) {
+        AppUi.desktopStyle(this);
         this.exams = exams; this.classes = classes;
         group.setId("results-class"); round.setId("results-round"); export.setId("results-export"); refresh.setId("results-refresh");
         group.getItems().add(new ClassFilter(null, "Tất cả lớp")); group.getSelectionModel().selectFirst();

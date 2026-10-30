@@ -4,6 +4,7 @@ import com.ptit.lanexam.common.ui.UiSupport;
 import com.ptit.lanexam.common.ui.AppUi;
 import com.ptit.lanexam.server.service.*;
 import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.geometry.Insets;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
@@ -22,11 +23,12 @@ public final class QuestionBankBrowser extends VBox {
     private final ComboBox<SubjectInfo> subject = new ComboBox<>();
     private final ComboBox<Integer> difficulty = new ComboBox<>(FXCollections.observableArrayList(0, 1, 2, 3, 4, 5, 6));
     private final TableView<BankQuestionInfo> table = new TableView<>();
-    private final TextArea preview = new TextArea();
+    private final ObservableList<BankQuestionInfo> loadedQuestions = FXCollections.observableArrayList();
     private final Label message = new Label("Đang tải môn học...");
     private final Button create = new Button("Tạo câu hỏi");
     private final Button edit = new Button("Sửa câu hỏi");
     private final Button importWord = new Button("Nhập Word");
+    private final TextField questionSearch = new TextField();
     private Consumer<SubjectInfo> subjectChanged = ignored -> {};
     private Consumer<BankQuestionInfo> questionSaved = ignored -> {};
     private boolean updatingSubjects;
@@ -35,7 +37,13 @@ public final class QuestionBankBrowser extends VBox {
     private long questionsVersion;
 
     public QuestionBankBrowser(QuestionBankService service) {
+        this(service, true);
+    }
+
+    /** Use a read-only picker when embedding the bank in the exam editor. */
+    public QuestionBankBrowser(QuestionBankService service, boolean manageQuestions) {
         super(8);
+        AppUi.desktopStyle(this);
         this.service = service;
         subject.setId("bank-subject");
         subject.setPrefWidth(270);
@@ -51,6 +59,9 @@ public final class QuestionBankBrowser extends VBox {
         create.setId("bank-create-question");
         edit.setId("bank-edit-question");
         importWord.setId("bank-import-word"); importWord.setDisable(true); importWord.setOnAction(e -> chooseWord());
+        questionSearch.setId("bank-question-search");
+        questionSearch.setPromptText("Tìm nội dung câu hỏi");
+        questionSearch.textProperty().addListener((obs, old, value) -> applyQuestionSearch(value));
         Button wordTemplate = new Button("Tải Word mẫu"); wordTemplate.setId("bank-word-template"); wordTemplate.setOnAction(e -> saveWordTemplate());
         Button refresh = new Button("Làm mới");
         refresh.setOnAction(event -> reloadSubjects(subject.getValue() == null ? null : subject.getValue().id()));
@@ -70,28 +81,30 @@ public final class QuestionBankBrowser extends VBox {
         table.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
         table.getColumns().add(UiSupport.column("Mã câu", 75, q -> Long.toString(q.id())));
         table.getColumns().add(UiSupport.column("Độ khó", 80, q -> Integer.toString(q.difficulty())));
-        table.getColumns().add(UiSupport.column("Nội dung câu hỏi", 480, q -> q.content().replaceAll("\\s+", " ")));
+        table.getColumns().add(QuestionDetailsDialog.contentColumn("Nội dung câu hỏi", 480, question -> {
+            if (manageQuestions) editQuestion(question);
+            else QuestionDetailsDialog.show(owner(), question);
+        }));
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
-        table.setPlaceholder(new Label("Chọn môn học; nếu chưa có câu hỏi, bấm Tạo câu hỏi."));
+        table.setPlaceholder(new Label("Chưa có câu hỏi phù hợp."));
         table.getSelectionModel().selectedItemProperty().addListener((obs, old, value) -> {
-            preview.setText(value == null ? "" : value.preview());
             edit.setDisable(value == null);
         });
-        table.setPrefHeight(220);
-        preview.setEditable(false);
-        preview.setWrapText(true);
-        preview.setPrefRowCount(3);
-        preview.setPromptText("Chọn một dòng để xem đầy đủ câu hỏi và đáp án.");
-        preview.setId("bank-question-preview");
+        table.setPrefHeight(manageQuestions ? 220 : 240);
         message.setWrapText(true);
         message.setId("bank-load-status");
         message.getStyleClass().add("muted");
         create.getStyleClass().add("primary");
         create.setDisable(true);
         edit.setDisable(true);
-        FlowPane subjects = new FlowPane(10, 8, subject, difficulty, newSubject);
-        HBox actions = AppUi.toolbar(create, edit, importWord, wordTemplate, AppUi.spacer(), refresh);
-        getChildren().addAll(subjects, actions, table, preview, message);
+        questionSearch.setPrefWidth(240);
+        FlowPane subjects = new FlowPane(10, 8, subject, difficulty, questionSearch, refresh);
+        if (manageQuestions) {
+            HBox actions = AppUi.toolbar(create, edit, newSubject, importWord, wordTemplate);
+            getChildren().addAll(subjects, table, actions, message);
+        } else {
+            getChildren().addAll(subjects, table, message);
+        }
         VBox.setVgrow(table, Priority.ALWAYS);
         setPadding(new Insets(8));
         reloadSubjects(null);
@@ -143,7 +156,7 @@ public final class QuestionBankBrowser extends VBox {
 
     private void addSubject() {
         TextInputDialog dialog = new TextInputDialog();
-        AppUi.style(dialog.getDialogPane());
+        AppUi.desktopStyle(dialog.getDialogPane());
         dialog.initOwner(owner());
         dialog.setTitle("Thêm môn học");
         dialog.setHeaderText("Tên môn học");
@@ -191,22 +204,32 @@ public final class QuestionBankBrowser extends VBox {
     private void loadQuestions() {
         long version = ++questionsVersion;
         SubjectInfo selected = subject.getValue();
+        loadedQuestions.clear();
         table.getItems().clear();
-        preview.clear();
         create.setDisable(selected == null);
         importWord.setDisable(selected == null);
         edit.setDisable(true);
         if (selected == null) {
-            message.setText("Chưa có môn học. Bấm Thêm môn học để bắt đầu.");
+            message.setText("Chưa có môn học.");
             return;
         }
         Integer level = difficulty.getValue() == null || difficulty.getValue() == 0 ? null : difficulty.getValue();
         message.setText("Đang tải câu hỏi...");
         UiSupport.async("load-bank-questions", () -> service.listQuestions(selected.id(), level), questions -> {
             if (disposed || version != questionsVersion) return;
-            table.getItems().setAll(questions);
-            message.setText(selected.name() + ": " + questions.size() + " câu phù hợp bộ lọc. Chọn nhiều dòng bằng Ctrl hoặc Shift.");
+            loadedQuestions.setAll(questions);
+            applyQuestionSearch(questionSearch.getText());
+            message.setText(questions.size() + " câu hỏi");
         }, ex -> { if (!disposed && version == questionsVersion) message.setText("Không tải được câu hỏi: " + ex.getMessage()); });
+    }
+
+    private void applyQuestionSearch(String rawQuery) {
+        String query = rawQuery == null ? "" : rawQuery.strip().toLowerCase(java.util.Locale.ROOT);
+        if (query.isEmpty()) table.getItems().setAll(loadedQuestions);
+        else table.getItems().setAll(loadedQuestions.stream()
+                .filter(question -> question.content().toLowerCase(java.util.Locale.ROOT).contains(query)
+                        || Long.toString(question.id()).contains(query))
+                .toList());
     }
 
     public void dispose() {

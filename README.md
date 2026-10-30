@@ -20,6 +20,8 @@ Client chỉ kết nối TCP tới Server. MySQL đặt ở máy giảng viên; 
 
 Một Server phục vụ **một giảng viên và một ca đang diễn ra tại một thời điểm**. Các lớp/ca thi được tổ chức lần lượt, kết quả mỗi lượt được giữ riêng. Tài khoản giảng viên mới bắt đầu trống, không tự tạo sinh viên hoặc đề demo.
 
+Server và Client dùng chung giao diện tông xám, menu bên trái và bảng dữ liệu có hàng/cột rõ ràng. Trong **Ngân hàng câu hỏi**, bấm nội dung câu để mở hộp chỉnh sửa. Trong cửa sổ tạo đề, bấm câu ở bảng ngân hàng hoặc bảng câu đã chọn để xem chi tiết; các thao tác tạo/sửa/nhập câu hỏi nằm ở trang ngân hàng riêng.
+
 ## Yêu cầu môi trường
 
 - JDK **21** và Maven **3.9+** trên máy chạy từ mã nguồn.

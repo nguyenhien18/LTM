@@ -110,7 +110,7 @@ public class ServerApp extends Application {
 
     private void loadDatabase() {
         long version = workspaceVersion;
-        mainStage.setScene(AppUi.scene(new StackPane(new Label("Đang kết nối dữ liệu...")), 660, 560));
+        mainStage.setScene(AppUi.desktopScene(new StackPane(new Label("Đang kết nối dữ liệu...")), 660, 560));
         UiSupport.async("teacher-database-startup", () -> { initializeDatabase.run(); return true; }, ready -> {
             if (version == workspaceVersion) showTeacherLogin();
         }, ex -> {
@@ -118,14 +118,14 @@ public class ServerApp extends Application {
             Label error = new Label("Không kết nối được database: " + ex.getMessage()); error.setWrapText(true);
             Button retry = new Button("Thử lại"); retry.setOnAction(event -> loadDatabase());
             VBox content = new VBox(16, error, retry); content.setPadding(new Insets(28));
-            mainStage.setScene(AppUi.scene(content, 660, 560));
+            mainStage.setScene(AppUi.desktopScene(content, 660, 560));
         });
     }
 
     private void showTeacherLogin() {
         teacherLogin = new TeacherLoginPane(teacherAccounts, this::enterWorkspace);
         StackPane root = new StackPane(teacherLogin); root.setId("teacher-login-root");
-        mainStage.setScene(AppUi.scene(root, 660, 600));
+        mainStage.setScene(AppUi.desktopScene(root, 660, 600));
         mainStage.setMinWidth(620);
         mainStage.setMinHeight(520);
         mainStage.setTitle("LAN Exam Server - Đăng nhập giáo viên");
@@ -145,9 +145,9 @@ public class ServerApp extends Application {
     private void showWorkspace() {
         pages.clear();
         navigation.clear();
-        statusLabel = new Label("Khởi động Server để sinh viên kết nối vào phòng học.");
+        statusLabel = new Label("Server chưa chạy");
         statusLabel.setWrapText(true);
-        addressLabel = new Label("Địa chỉ kết nối sẽ hiển thị khi Server sẵn sàng.");
+        addressLabel = new Label("");
         addressLabel.setId("server-address");
         addressLabel.setWrapText(true);
         connectionState = AppUi.label("Chưa kết nối", "badge");
@@ -181,20 +181,21 @@ public class ServerApp extends Application {
         Button classes = navButton("classes", "Lớp & sinh viên");
         Region sidebarSpace = new Region();
         VBox.setVgrow(sidebarSpace, Priority.ALWAYS);
-        VBox sidebar = new VBox(7, AppUi.label("LAN Exam", "brand"),
-                AppUi.label("Không gian giảng viên", "brand-caption"), classes, questionBankButton, room,
-                resultsButton, sidebarSpace,
-                AppUi.label("Thi trắc nghiệm\ntrong mạng nội bộ", "sidebar-note"));
-        sidebar.setPrefWidth(220);
-        sidebar.setMinWidth(220);
+        passwordButton.getStyleClass().add("account-button");
+        logoutButton.getStyleClass().add("account-button");
+        lockedAccountsButton.getStyleClass().add("account-button");
+        for (Button button : new Button[]{passwordButton, logoutButton, lockedAccountsButton}) button.setMaxWidth(Double.MAX_VALUE);
+        VBox sidebar = new VBox(7, AppUi.label("LAN Exam", "brand"), classes, questionBankButton, room,
+                resultsButton, sidebarSpace, lockedAccountsButton, passwordButton, logoutButton);
+        sidebar.setPrefWidth(185);
+        sidebar.setMinWidth(185);
         sidebar.getStyleClass().add("sidebar");
 
-        HBox topbar = AppUi.toolbar(connectionState, AppUi.spacer(), teacherLabel, lockedAccountsButton, passwordButton, logoutButton);
+        HBox topbar = AppUi.toolbar(connectionState, startButton, stopButton, addressLabel, AppUi.spacer(), teacherLabel);
         topbar.getStyleClass().add("topbar");
         pageHost = new BorderPane();
         BorderPane workspace = new BorderPane(pageHost);
-        HBox controls = AppUi.toolbar(startButton, stopButton, addressLabel); controls.getStyleClass().add("connection-controls");
-        VBox connection = new VBox(0, topbar, controls);
+        VBox connection = new VBox(0, topbar);
         connection.getStyleClass().add("connection-header"); workspace.setTop(connection);
         HBox footer = AppUi.toolbar(statusLabel);
         footer.getStyleClass().add("status-bar");
@@ -204,7 +205,7 @@ public class ServerApp extends Application {
 
         pages.put("room", roomPage());
         showPage("classes");
-        mainStage.setScene(AppUi.scene(root, 1280, 780));
+        mainStage.setScene(AppUi.desktopScene(root, 1280, 780));
         mainStage.setMinWidth(1080);
         mainStage.setMinHeight(680);
         mainStage.setTitle("LAN Exam — " + teacher.fullName());
@@ -254,7 +255,7 @@ public class ServerApp extends Application {
         });
     }
     private VBox page(String title, String description, Node content) {
-        VBox result = new VBox(18, AppUi.heading(title, description), content);
+        VBox result = new VBox(16, AppUi.label(title, "page-title"), new Separator(), content);
         result.getStyleClass().add("page");
         VBox.setVgrow(content, Priority.ALWAYS);
         return result;
@@ -329,7 +330,7 @@ public class ServerApp extends Application {
         ExamServer activeServer = server;
         if (activeServer == null || !activeServer.isRunning()) return;
         TextInputDialog dialog = new TextInputDialog(lock ? "Vi phạm quy chế thi" : "Bạn đang vi phạm quy chế thi. Vui lòng dừng hành vi vi phạm.");
-        AppUi.style(dialog.getDialogPane());
+        AppUi.desktopStyle(dialog.getDialogPane());
         dialog.initOwner(mainStage);
         dialog.setTitle(lock ? "Khóa tài khoản" : "Cảnh báo vi phạm");
         dialog.setHeaderText((lock ? "Khóa " : "Cảnh báo ") + student.studentCode() + " — " + student.fullName());
@@ -447,7 +448,7 @@ public class ServerApp extends Application {
     }
     private void showError(String title, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
-        AppUi.style(alert.getDialogPane());
+        AppUi.desktopStyle(alert.getDialogPane());
         alert.initOwner(mainStage);
         alert.getDialogPane().setId("server-error-notice");
         alert.getDialogPane().setPrefWidth(560);

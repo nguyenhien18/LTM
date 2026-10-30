@@ -291,6 +291,51 @@ class ExamWorkflowUiTest {
     }
 
     @Test
+    void clickingBankQuestionOpensEditorAndRefreshesSavedContent() throws Exception {
+        try (EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver", "jakarta.persistence.jdbc.url", "jdbc:h2:mem:question_click_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "", "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var bank = new QuestionBankService(factory::createEntityManager);
+            var subject = bank.createSubject("Lập trình mạng");
+            var original = bank.createQuestion(new BankQuestionDraft(subject.id(), 1,
+                    new ExamDraft.QuestionDraft("Giao thức nào tin cậy?", QuestionType.MULTIPLE_CHOICE, "TCP", "UDP", "IP", "ICMP", "A")));
+            var view = fx(() -> new com.ptit.lanexam.server.QuestionBankBrowser(bank));
+            Stage stage = fx(() -> {
+                var s = new Stage(); s.setScene(com.ptit.lanexam.common.ui.AppUi.scene(view, 1100, 680)); s.show(); return s;
+            });
+            try {
+                awaitFx(() -> !stage.getScene().getRoot().lookupAll(".hyperlink").isEmpty());
+                fx(() -> {
+                    assertNull(view.lookup("#bank-question-preview"), "Không hiển thị ô xem trước dưới bảng quản lý.");
+                    var link = (Hyperlink) view.lookupAll(".hyperlink").stream()
+                            .filter(node -> node instanceof Hyperlink h && h.getText().equals(original.content())).findFirst().orElseThrow();
+                    Platform.runLater(link::fire); return null;
+                });
+                awaitFx(() -> notice("#question-editor") != null);
+                fx(() -> {
+                    var pane = notice("#question-editor");
+                    assertEquals(original.content(), ((TextArea) pane.lookup("#question-content")).getText());
+                    ((TextArea) pane.lookup("#question-content")).setText("Câu hỏi đã chỉnh sửa");
+                    snapshot(pane, "bank-question-click-editor");
+                    ((Button) pane.lookup("#question-save")).fire(); return null;
+                });
+                awaitFx(() -> view.lookup("#bank-questions") instanceof TableView<?> table
+                        && table.getItems().size() == 1
+                        && ((BankQuestionInfo) table.getItems().getFirst()).content().equals("Câu hỏi đã chỉnh sửa"));
+                var saved = bank.listQuestions(subject.id(), null).getFirst();
+                assertEquals(original.id(), saved.id());
+                assertEquals("Câu hỏi đã chỉnh sửa", saved.content());
+                fx(() -> { snapshot(view, "bank-without-inline-preview"); return null; });
+            } finally {
+                fx(() -> {
+                    var pane = notice("#question-editor"); if (pane != null) pane.getScene().getWindow().hide();
+                    view.dispose(); stage.close(); return null;
+                });
+            }
+        }
+    }
+
+    @Test
     void wordImportPreviewsAllLevelsCancelsSafelyCommitsAndPreventsDuplicateReimport() throws Exception {
         try (EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
                 "jakarta.persistence.jdbc.driver", "org.h2.Driver", "jakarta.persistence.jdbc.url", "jdbc:h2:mem:word_ui_" + UUID.randomUUID() + ";MODE=MySQL",
@@ -750,6 +795,11 @@ class ExamWorkflowUiTest {
             return created;
         });
         awaitFx(() -> bankTable(dialog).getItems().size() == 3 && bankReady(dialog));
+        assertQuestionDetailsFromTable(bankTable(dialog));
+        fx(() -> {
+            assertTrue(dialog.getDialogPane().lookupAll(".text-area").isEmpty(), "Không còn hai ô xem trước trong cửa sổ tạo đề.");
+            return null;
+        });
         fx(() -> {
             bankTable(dialog).getSelectionModel().selectIndices(0, 1);
             ((Button) dialog.getDialogPane().lookup("#exam-add-selected")).fire();
@@ -758,6 +808,7 @@ class ExamWorkflowUiTest {
             ((ComboBox<Integer>) dialog.getDialogPane().lookup("#bank-difficulty")).setValue(6);
             return null;
         });
+        assertQuestionDetailsFromTable(selectedTable(dialog));
         awaitFx(() -> bankTable(dialog).getItems().size() == 1 && bankReady(dialog));
         fx(() -> {
             assertEquals(102L, bankTable(dialog).getItems().getFirst().id());
@@ -1228,8 +1279,29 @@ class ExamWorkflowUiTest {
     private static TableView<BankQuestionInfo> selectedTable(Dialog<?> dialog) {
         return (TableView<BankQuestionInfo>) dialog.getDialogPane().lookup("#exam-selected-questions");
     }
+    private static void assertQuestionDetailsFromTable(TableView<BankQuestionInfo> table) throws Exception {
+        BankQuestionInfo expected = fx(() -> table.getItems().getFirst());
+        awaitFx(() -> table.lookupAll(".hyperlink").stream()
+                .anyMatch(node -> node instanceof Hyperlink link && link.getText().equals(expected.content())));
+        fx(() -> {
+            var link = (Hyperlink) table.lookupAll(".hyperlink").stream()
+                    .filter(node -> node instanceof Hyperlink h && h.getText().equals(expected.content())).findFirst().orElseThrow();
+            Platform.runLater(link::fire); return null;
+        });
+        awaitFx(() -> notice("#question-details") != null);
+        fx(() -> {
+            var pane = notice("#question-details");
+            var content = (TextArea) pane.lookup("#question-details-content");
+            assertEquals(expected.preview(), content.getText());
+            assertFalse(content.isEditable());
+            snapshot(pane, "exam-question-details");
+            ((Button) pane.lookup("#question-details-close")).fire();
+            return null;
+        });
+    }
+
     private static boolean bankReady(Dialog<?> dialog) {
-        return ((Label) dialog.getDialogPane().lookup("#bank-load-status")).getText().contains("câu phù hợp");
+        return ((Label) dialog.getDialogPane().lookup("#bank-load-status")).getText().matches("\\d+ câu hỏi");
     }
     private static void awaitFx(Supplier<Boolean> condition) throws Exception {
         long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);

@@ -25,6 +25,7 @@ public final class ExamTemplateManager extends BorderPane {
     private long loadVersion;
 
     public ExamTemplateManager(Window owner, ExamService exams, QuestionBankService bank, Consumer<String> announce) {
+        AppUi.desktopStyle(this);
         this.exams = exams;
         table.setId("teacher-exam-templates");
         table.getColumns().add(UiSupport.column("Tên đề", 340, ExamSummary::title));
@@ -62,7 +63,7 @@ public final class ExamTemplateManager extends BorderPane {
             all.setAll(rows);
             table.getSelectionModel().select(filtered.stream().filter(e -> e.id().equals(id)).findFirst().orElse(filtered.isEmpty() ? null : filtered.getFirst()));
             refresh.setDisable(false); create.setDisable(saving);
-            message.setText(rows.size() + " đề mẫu · Chuyển sang tab Ca thi để chọn lớp và bắt đầu.");
+            message.setText(rows.size() + " đề thi");
         }, ex -> {
             if (disposed || request != loadVersion) return;
             refresh.setDisable(false); create.setDisable(saving); message.setText("Không tải được đề: " + ex.getMessage());

@@ -14,7 +14,7 @@ public final class QuestionWordPreviewDialog {
         Dialog<ButtonType> dialog = new Dialog<>();
         if (owner != null) dialog.initOwner(owner);
         dialog.setTitle("Nhập câu hỏi từ Word"); dialog.setHeaderText("Môn học: " + subject.name()); dialog.setResizable(true);
-        DialogPane pane = dialog.getDialogPane(); pane.setId("bank-word-preview"); AppUi.style(pane);
+        DialogPane pane = dialog.getDialogPane(); pane.setId("bank-word-preview"); AppUi.desktopStyle(pane);
         ButtonType confirm = new ButtonType("Nhập " + preview.count(QuestionBankService.WordStatus.NEW) + " câu mới", ButtonBar.ButtonData.OK_DONE);
         pane.getButtonTypes().addAll(confirm, ButtonType.CANCEL);
         pane.lookupButton(ButtonType.CANCEL).setId("bank-word-cancel");

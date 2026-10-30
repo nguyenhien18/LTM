@@ -19,7 +19,7 @@ public final class LockedAccountManager {
         window.setTitle("Tài khoản bị khóa");
         VBox root = content(window, auth);
         root.setPadding(new Insets(20));
-        window.setScene(AppUi.scene(root, 850, 500));
+        window.setScene(AppUi.desktopScene(root, 850, 500));
         window.show();
     }
 

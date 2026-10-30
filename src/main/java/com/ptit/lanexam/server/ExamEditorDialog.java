@@ -26,10 +26,10 @@ public final class ExamEditorDialog {
     public static Dialog<BankExamDraft> create(Window owner, QuestionBankService service) {
         Dialog<BankExamDraft> dialog = new Dialog<>();
         dialog.getDialogPane().setId("exam-editor");
-        AppUi.style(dialog.getDialogPane());
+        AppUi.desktopStyle(dialog.getDialogPane());
         dialog.initOwner(owner);
         dialog.setTitle("Tạo đề thi từ ngân hàng câu hỏi");
-        dialog.setHeaderText("Chọn câu từ ngân hàng chung. Một câu hỏi có thể được chọn cho nhiều đề thi.");
+        dialog.setHeaderText(null);
         dialog.setResizable(true);
         ButtonType saveType = new ButtonType("Lưu đề thi", ButtonBar.ButtonData.OK_DONE);
         dialog.getDialogPane().getButtonTypes().addAll(saveType, new ButtonType("Hủy", ButtonBar.ButtonData.CANCEL_CLOSE));
@@ -42,24 +42,18 @@ public final class ExamEditorDialog {
         duration.setEditable(true);
         duration.setPrefWidth(90);
         HBox form = new HBox(10, new Label("Tên đề"), title, new Label("Thời gian (phút)"), duration);
-        QuestionBankBrowser bank = new QuestionBankBrowser(service);
+        QuestionBankBrowser bank = new QuestionBankBrowser(service, false);
         ObservableList<BankQuestionInfo> chosen = FXCollections.observableArrayList();
         TableView<BankQuestionInfo> selected = new TableView<>(chosen);
         selected.setId("exam-selected-questions");
+        selected.setPrefHeight(240);
         selected.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
         selected.getColumns().add(UiSupport.column("Mã", 55, q -> Long.toString(q.id())));
         selected.getColumns().add(UiSupport.column("Độ khó", 65, q -> Integer.toString(q.difficulty())));
-        selected.getColumns().add(UiSupport.column("Câu hỏi", 220, q -> q.content().replaceAll("\\s+", " ")));
+        selected.getColumns().add(QuestionDetailsDialog.contentColumn("Câu hỏi", 220,
+                question -> QuestionDetailsDialog.show(dialog.getDialogPane().getScene().getWindow(), question)));
         selected.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
-        selected.setPlaceholder(new Label("Chưa chọn câu hỏi nào."));
-        TextArea selectedPreview = new TextArea();
-        selectedPreview.setEditable(false);
-        selectedPreview.setWrapText(true);
-        selectedPreview.setPrefRowCount(3);
-        selectedPreview.setMinHeight(130);
-        selectedPreview.setPromptText("Chọn một câu trong đề để xem đầy đủ nội dung.");
-        selected.getSelectionModel().selectedItemProperty().addListener((obs, old, question) ->
-                selectedPreview.setText(question == null ? "" : question.preview()));
+        selected.setPlaceholder(new Label("Chưa có câu trong đề. Chọn câu ở bảng ngân hàng rồi bấm Thêm vào đề."));
         Label count = new Label();
         count.setId("exam-question-count");
         count.setWrapText(true);
@@ -80,9 +74,9 @@ public final class ExamEditorDialog {
         }
         Button draw = new Button("Lấy câu ngẫu nhiên"), replace = new Button("Đổi câu đang chọn");
         draw.setId("exam-random-draw"); replace.setId("exam-random-replace");
-        Label randomNote = AppUi.label("Lấy bộ mới sẽ thay danh sách bên phải. Đổi một câu giữ nguyên mức và tránh câu đã chọn.", "muted");
-        HBox quickControls = new HBox(18, matrix, new VBox(7, draw, replace));
-        TitledPane quick = new TitledPane("Tạo đề nhanh theo số câu từng mức", new VBox(8, quickControls, randomNote)); quick.setId("exam-quick-create"); quick.setExpanded(true);
+        Label randomNote = AppUi.label("Lấy bộ mới thay danh sách câu đã chọn. Đổi câu giữ nguyên mức và bỏ qua câu đã có trong đề.", "muted");
+        HBox quickControls = new HBox(18, matrix, draw);
+        TitledPane quick = new TitledPane("Tạo đề tự động theo mức", new VBox(8, quickControls, randomNote)); quick.setId("exam-quick-create"); quick.setExpanded(false);
         draw.setOnAction(event -> {
             try {
                 if (bank.subject() == null) throw new IllegalArgumentException("Chọn môn thi trước.");
@@ -124,7 +118,7 @@ public final class ExamEditorDialog {
                     break;
                 }
         });
-        Button add = new Button("Thêm câu đã chọn →");
+        Button add = new Button("Thêm vào đề");
         add.setId("exam-add-selected");
         add.setOnAction(event -> {
             List<BankQuestionInfo> additions = bank.selectedQuestions().stream()
@@ -146,19 +140,22 @@ public final class ExamEditorDialog {
         down.setId("exam-move-down");
         up.setOnAction(event -> move(selected, chosen, -1));
         down.setOnAction(event -> move(selected, chosen, 1));
-        VBox left = new VBox(6, new Label("Ngân hàng câu hỏi chung — chọn môn và lọc độ khó"), bank, add);
+        Label bankHeading = new Label("Ngân hàng câu hỏi");
+        Label selectionHint = AppUi.label("Chọn môn và mức độ, tìm câu cần dùng rồi thêm vào đề.", "muted");
+        VBox bankSection = new VBox(5, bankHeading, bank, add);
+        bankSection.getStyleClass().add("surface");
         VBox.setVgrow(bank, Priority.ALWAYS);
-        VBox right = new VBox(8, new Label("Câu hỏi trong đề (theo thứ tự hiển thị)"),
-                selected, new HBox(8, remove, up, down), selectedPreview);
-        right.setPadding(new Insets(8));
+        Label selectedHeading = new Label("Câu hỏi trong đề");
+        HBox selectedActions = AppUi.toolbar(remove, replace, up, down);
+        VBox selectedSection = new VBox(6, selectedHeading, selected, selectedActions);
+        selectedSection.getStyleClass().add("surface");
         VBox.setVgrow(selected, Priority.ALWAYS);
-        SplitPane split = new SplitPane(left, right);
-        split.setDividerPositions(0.60);
-        VBox body = new VBox(10, form, quick, split, count, new Label("Đổi môn thi sẽ bỏ các câu đã chọn trong đề."), error);
+        VBox body = new VBox(9, form, quick, bankSection, selectedSection, count, error);
         body.setPadding(new Insets(12));
-        VBox.setVgrow(split, Priority.ALWAYS);
+        VBox.setVgrow(bankSection, Priority.ALWAYS);
+        VBox.setVgrow(selectedSection, Priority.ALWAYS);
         dialog.getDialogPane().setContent(body);
-        dialog.getDialogPane().setPrefSize(1180, 750);
+        dialog.getDialogPane().setPrefSize(1120, 820);
         BankExamDraft[] result = {null};
         dialog.getDialogPane().lookupButton(saveType).setId("exam-save");
         dialog.getDialogPane().lookupButton(saveType).addEventFilter(ActionEvent.ACTION, event -> {

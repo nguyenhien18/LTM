@@ -13,6 +13,7 @@ import javafx.scene.layout.VBox;
 /** Shared presentation helpers for the teacher and student applications. */
 public final class AppUi {
     private static final String STYLESHEET = AppUi.class.getResource("/styles/app.css").toExternalForm();
+    private static final String DESKTOP_STYLESHEET = AppUi.class.getResource("/styles/desktop.css").toExternalForm();
 
     private AppUi() {}
 
@@ -24,6 +25,17 @@ public final class AppUi {
 
     public static void style(Parent root) {
         if (!root.getStylesheets().contains(STYLESHEET)) root.getStylesheets().add(STYLESHEET);
+    }
+
+    public static Scene desktopScene(Parent root, double width, double height) {
+        desktopStyle(root);
+        return scene(root, width, height);
+    }
+
+    public static void desktopStyle(Parent root) {
+        style(root);
+        if (!root.getStyleClass().contains("desktop-ui")) root.getStyleClass().add("desktop-ui");
+        if (!root.getStylesheets().contains(DESKTOP_STYLESHEET)) root.getStylesheets().add(DESKTOP_STYLESHEET);
     }
 
     public static Label label(String text, String styleClass) {

@@ -24,7 +24,8 @@ public final class QuestionEditorDialog {
     public static Dialog<BankQuestionDraft> create(Window owner, List<SubjectInfo> subjects,
                                                    SubjectInfo defaultSubject, BankQuestionInfo existing) {
         Dialog<BankQuestionDraft> dialog = new Dialog<>();
-        AppUi.style(dialog.getDialogPane());
+        dialog.getDialogPane().setId("question-editor");
+        AppUi.desktopStyle(dialog.getDialogPane());
         dialog.initOwner(owner);
         dialog.setTitle(existing == null ? "Tạo câu hỏi" : "Sửa câu hỏi #" + existing.id());
         dialog.setHeaderText("Câu trắc nghiệm có bốn lựa chọn A–D và một đáp án đúng; phân loại theo môn và độ khó.");

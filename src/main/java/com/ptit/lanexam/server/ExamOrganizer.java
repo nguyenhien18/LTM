@@ -43,6 +43,7 @@ final class ExamOrganizer extends BorderPane {
     ExamOrganizer(ClassService classes, ExamService exams, ExamShiftService shifts, Supplier<ExamServer> server,
                   ObservableList<ClientSessionInfo> sessions, Consumer<ClientSessionInfo> warn,
                   Consumer<ClientSessionInfo> lock, Consumer<String> announce) {
+        AppUi.desktopStyle(this);
         this.classes = classes; this.exams = exams; this.shifts = shifts; this.server = server; this.sessions = sessions; this.announce = announce;
         group.setId("exam-class"); exam.setId("exam-template"); group.setPromptText("Chọn lớp / nhóm thi"); exam.setPromptText("Chọn đề đã lưu");
         group.setMaxWidth(Double.MAX_VALUE); exam.setMaxWidth(Double.MAX_VALUE);
@@ -69,16 +70,16 @@ final class ExamOrganizer extends BorderPane {
         Button refresh = new Button("Làm mới lớp / đề"); refresh.setId("exam-organizer-refresh"); refresh.setOnAction(e -> reload());
         HBox splitControls = AppUi.toolbar(new Label("Sinh viên / ca"), capacity, split);
         HBox shiftControls = AppUi.toolbar(shift, shiftState); HBox.setHgrow(shift, Priority.ALWAYS);
-        VBox classControls = new VBox(10, new Label("1. Chọn lớp và ca thi"), group, splitControls, shiftControls);
+        VBox classControls = new VBox(10, new Label("Lớp và ca thi"), group, splitControls, shiftControls);
         status.setWrapText(true); status.setMinWidth(0); status.setMaxWidth(Double.MAX_VALUE);
-        VBox examControls = new VBox(10, new Label("2. Chọn đề kiểm tra"), exam,
-                AppUi.toolbar(new Label("Số mã đề"), variantCount, AppUi.label("1: đề gốc · 2–8: đảo câu và lựa chọn", "muted")),
+        VBox examControls = new VBox(10, new Label("Đề thi"), exam,
+                AppUi.toolbar(new Label("Số mã đề"), variantCount),
                 AppUi.toolbar(prepare, start, AppUi.spacer(), refresh), status);
         classControls.setMinWidth(0); examControls.setMinWidth(0);
         classControls.setPrefWidth(480); examControls.setPrefWidth(480);
         HBox.setHgrow(classControls, Priority.ALWAYS); HBox.setHgrow(examControls, Priority.ALWAYS);
         VBox selection = AppUi.card(new HBox(22, classControls, examControls));
-        roster.setId("exam-roster"); roster.setFixedCellSize(46); roster.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        roster.setId("exam-roster"); roster.setFixedCellSize(36); roster.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         var ordinalColumn = UiSupport.<ClassService.RosterStudent>column("STT", 60, r -> r.ordinal() == null ? "—" : r.ordinal().toString());
         ordinalColumn.setMinWidth(55); roster.getColumns().add(ordinalColumn);
         roster.getColumns().add(UiSupport.column("Mã sinh viên", 140, ClassService.RosterStudent::code));
@@ -181,7 +182,7 @@ final class ExamOrganizer extends BorderPane {
             boolean opened = selectedShift != null && selectedShift.roundId() != null
                     || progress != null && exams.currentTime().isBefore(progress.deadline());
             busy = false; roster.getItems().setAll(rows); prepared = !rows.isEmpty() && !opened; refreshConnections();
-            status.setText(prepared ? "Sẵn sàng. Bắt đầu thi sẽ chốt danh sách và tính giờ; sinh viên thêm sau chờ lượt tiếp theo."
+            status.setText(prepared ? "Sẵn sàng bắt đầu thi."
                     : opened ? "Ca đã mở, danh sách đã chốt. Sinh viên thêm vào lớp sau đó chờ lượt thi tiếp theo."
                     : "Lớp chưa có sinh viên. Nhập CSV trong Lớp & sinh viên trước.");
         }, this::failed);
@@ -210,7 +211,7 @@ final class ExamOrganizer extends BorderPane {
     }
     private void showShiftState() {
         var selected = shift.getValue();
-        shiftState.setText(selected == null ? "Thi cả lớp nếu chưa chia ca"
+        shiftState.setText(selected == null ? "Cả lớp"
                 : progress != null && java.util.Objects.equals(selected.roundId(), progress.roundId())
                 ? (exams.currentTime().isBefore(progress.deadline()) ? "Đang thi" : "Đã kết thúc") : selected.state(exams.currentTime()));
         prepare.setText(selected != null && selected.roundId() != null ? "Xem danh sách ca" : "Chuẩn bị ca thi");
@@ -229,7 +230,7 @@ final class ExamOrganizer extends BorderPane {
         UiSupport.async("load-exam-shifts", () -> shifts.list(selected.id()), items -> {
             if (disposed || request != version) return;
             busy = false; setShifts(items, oldShift); refreshConnections();
-            status.setText(items.isEmpty() ? "Có thể thi cả lớp hoặc chia ca theo STT gốc trên CSV. Chuẩn bị chưa tính giờ."
+            status.setText(items.isEmpty() ? "Chưa chia ca"
                     : "Đã lưu " + items.size() + " ca. Chọn ca và đề, chuẩn bị danh sách rồi bắt đầu.");
         }, this::failed);
     }

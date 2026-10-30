@@ -17,7 +17,7 @@ public final class ExamQuestionNavigator extends VBox {
         super(14);
         buttons = new Button[count]; answered = new boolean[count]; flagged = new boolean[count];
         getStyleClass().add("question-navigator");
-        setPrefWidth(220); setMinWidth(220);
+        setPrefWidth(185); setMinWidth(185);
         progress.setId("exam-progress");
         TilePane grid = new TilePane(8, 8);
         grid.setPrefColumns(3);
@@ -26,7 +26,7 @@ public final class ExamQuestionNavigator extends VBox {
             Button button = new Button();
             button.setId("question-jump-" + (index + 1));
             button.getStyleClass().add("question-link");
-            button.setMinSize(52, 40); button.setPrefSize(52, 40);
+            button.setMinSize(44, 34); button.setPrefSize(44, 34);
             button.setOnAction(event -> jump.accept(target));
             buttons[index] = button; grid.getChildren().add(button);
             update(index);

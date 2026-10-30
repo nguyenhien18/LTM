@@ -19,6 +19,13 @@
     -fx-border-radius: 12;
     -fx-padding: 20;
 }
+.surface {
+    -fx-background-color: white;
+    -fx-background-radius: 10;
+    -fx-border-color: #e2e7f0;
+    -fx-border-radius: 10;
+    -fx-padding: 12;
+}
 .login-card { -fx-padding: 32; }
 .button, .menu-button, .toggle-button {
     -fx-background-color: white;

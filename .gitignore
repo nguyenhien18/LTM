@@ -4,6 +4,7 @@ dist/
 /output/
 /packaging/
 /build-client-exe.bat
+/src*.zip
 .idea/
 *.iml
 .vscode/

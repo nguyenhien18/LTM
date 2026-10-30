@@ -19,7 +19,7 @@ public final class TeacherAccountDialogs {
     }
     public static Dialog<Registration> registration(Window owner) {
         Dialog<Registration> dialog = new Dialog<>();
-        AppUi.style(dialog.getDialogPane());
+        AppUi.desktopStyle(dialog.getDialogPane());
         dialog.initOwner(owner);
         dialog.setTitle("Tạo tài khoản giáo viên");
         dialog.getDialogPane().setId("teacher-register-dialog");
@@ -50,7 +50,7 @@ public final class TeacherAccountDialogs {
 
     public static Optional<PasswordChange> changePassword(Window owner) {
         Dialog<PasswordChange> dialog = new Dialog<>();
-        AppUi.style(dialog.getDialogPane());
+        AppUi.desktopStyle(dialog.getDialogPane());
         dialog.initOwner(owner); dialog.setTitle("Đổi mật khẩu giáo viên");
         PasswordField current = new PasswordField();
         PasswordField password = new PasswordField();

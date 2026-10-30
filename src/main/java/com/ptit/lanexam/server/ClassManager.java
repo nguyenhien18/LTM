@@ -34,6 +34,7 @@ public final class ClassManager extends BorderPane {
     public ClassManager(Window owner, ClassService service, QuestionBankService bank,
                         ObservableList<ClientSessionInfo> sessions, Runnable changed) {
         this.owner = owner; this.service = service; this.bank = bank; this.sessions = sessions; this.changed = changed;
+        AppUi.desktopStyle(this);
         setId("class-manager");
         classes.setId("class-selector"); classes.setPromptText("Chọn lớp học phần"); classes.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(classes, Priority.ALWAYS);
@@ -51,7 +52,7 @@ public final class ClassManager extends BorderPane {
         roster.setId("class-roster");
         roster.getColumns().add(UiSupport.column("STT", 60, s -> s.ordinal() == null ? "—" : s.ordinal().toString()));
         roster.getColumns().add(UiSupport.column("Mã sinh viên", 170, ClassService.RosterStudent::code));
-        var names = UiSupport.<ClassService.RosterStudent>column("Họ và tên · bấm để sửa", 260, ClassService.RosterStudent::fullName);
+        var names = UiSupport.<ClassService.RosterStudent>column("Họ và tên", 260, ClassService.RosterStudent::fullName);
         names.setCellFactory(column -> new TableCell<>() {
             private final Hyperlink link = new Hyperlink();
             { link.setStyle("-fx-padding: 0;"); link.setOnAction(e -> {
@@ -83,7 +84,7 @@ public final class ClassManager extends BorderPane {
     }
     public void dispose() { disposed = true; rosterVersion++; sessions.removeListener(sessionListener); }
     private void editProfile(ClassInfo group, ClassService.RosterStudent student) {
-        Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.style(dialog.getDialogPane());
+        Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.desktopStyle(dialog.getDialogPane());
         dialog.setTitle("Sửa hồ sơ sinh viên"); dialog.getDialogPane().setId("student-profile-editor");
         TextField code = new TextField(student.code()); code.setEditable(false); code.setId("student-profile-code");
         TextField name = new TextField(student.fullName()); name.setId("student-profile-name");
@@ -132,14 +133,14 @@ public final class ClassManager extends BorderPane {
         detail.setText(c.subjectName() + " · " + c.semester());
         UiSupport.async("load-class-roster", () -> service.roster(c.id()), rows -> {
             if (disposed || version != rosterVersion) return;
-            roster.getItems().setAll(rows); message.setText(rows.size() + " sinh viên. Trạng thái là kết nối hiện tại, chưa dùng để kết luận vắng học.");
+            roster.getItems().setAll(rows); message.setText(rows.size() + " sinh viên");
             long missing = rows.stream().filter(s -> s.ordinal() == null).count();
             ordinalHelp.setVisible(missing > 0); ordinalHelp.setManaged(missing > 0);
             ordinalNotice.setText(missing == 0 ? "" : missing + " sinh viên chưa có STT (hiện —). Nhập lại CSV gốc có cột STT để cập nhật vào danh sách hiện có và chia ca.");
         }, ex -> { if (!disposed && version == rosterVersion) message.setText(ex.getMessage()); });
     }
     private void createClass(List<SubjectInfo> subjects) {
-        Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.style(dialog.getDialogPane());
+        Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.desktopStyle(dialog.getDialogPane());
         dialog.setTitle("Tạo lớp học phần"); dialog.getDialogPane().setId("class-editor");
         TextField code = new TextField(); code.setId("class-code"); code.setPromptText("VD: LTM-01-2026HK1");
         TextField name = new TextField(); name.setId("class-name"); name.setPromptText("VD: Lập trình mạng · Nhóm 01");
@@ -151,7 +152,7 @@ public final class ClassManager extends BorderPane {
         Label error = new Label(); error.setWrapText(true); error.getStyleClass().add("error-text");
         addSubject.setOnAction(e -> {
             TextInputDialog input = new TextInputDialog(); input.initOwner(dialog.getDialogPane().getScene().getWindow());
-            AppUi.style(input.getDialogPane()); input.setTitle("Thêm môn học"); input.setHeaderText("Tên môn dùng chung với ngân hàng câu hỏi.");
+            AppUi.desktopStyle(input.getDialogPane()); input.setTitle("Thêm môn học"); input.setHeaderText("Tên môn dùng chung với ngân hàng câu hỏi.");
             input.showAndWait().filter(s -> !s.isBlank()).ifPresent(value -> {
                 addSubject.setDisable(true);
                 UiSupport.async("create-class-subject", () -> bank.createSubject(value), saved -> {
@@ -189,7 +190,7 @@ public final class ClassManager extends BorderPane {
     // Public so an integration test can exercise the real preview and confirmation without an OS file dialog.
     public void showPreview(ClassInfo c, ClassService.ImportPreview preview) {
         Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); dialog.setTitle("Xem trước nhập danh sách · " + c.code());
-        AppUi.style(dialog.getDialogPane()); dialog.getDialogPane().setId("class-import-preview");
+        AppUi.desktopStyle(dialog.getDialogPane()); dialog.getDialogPane().setId("class-import-preview");
         TableView<ClassService.ImportRow> table = new TableView<>(FXCollections.observableArrayList(preview.rows()));
         table.getColumns().add(UiSupport.column("STT", 60, r -> r.student().ordinal() == null ? "—" : r.student().ordinal().toString()));
         table.getColumns().add(UiSupport.column("Mã sinh viên", 130, r -> r.student().code()));

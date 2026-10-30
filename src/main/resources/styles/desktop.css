@@ -1,0 +1,74 @@
+.desktop-ui {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 13px;
+    -fx-background-color: #f5f5f5;
+    -fx-text-fill: #242424;
+    -fx-accent: #5e656c;
+    -fx-focus-color: #8c9298;
+}
+.desktop-ui .label { -fx-text-fill: #242424; }
+.desktop-ui .muted { -fx-text-fill: #626262; }
+.desktop-ui .page-title { -fx-font-size: 23px; -fx-font-weight: normal; }
+.desktop-ui .section-title { -fx-font-size: 14px; -fx-font-weight: bold; }
+.desktop-ui .page { -fx-padding: 24 28; -fx-spacing: 16; }
+.desktop-ui .sidebar { -fx-background-color: #e7e7e7; -fx-padding: 24 12; -fx-spacing: 5; }
+.desktop-ui .sidebar .brand { -fx-text-fill: #262626; -fx-font-size: 20px; -fx-padding: 0 10 24 10; }
+.desktop-ui .sidebar .nav-button, .desktop-ui .sidebar .account-button { -fx-text-fill: #333333; -fx-font-size: 13px; -fx-padding: 11 12; -fx-background-radius: 3; -fx-border-radius: 3; -fx-background-color: transparent; -fx-border-color: transparent; -fx-alignment: CENTER_LEFT; }
+.desktop-ui .sidebar .account-button:hover { -fx-background-color: #dadada; }
+.desktop-ui .sidebar .nav-button:hover { -fx-background-color: #dadada; }
+.desktop-ui .sidebar .nav-button.active { -fx-background-color: #cfcfcf; -fx-text-fill: #111111; -fx-font-weight: bold; }
+.desktop-ui .topbar, .desktop-ui .connection-controls { -fx-background-color: #f5f5f5; -fx-padding: 10 24; -fx-border-color: transparent transparent #d1d1d1 transparent; }
+.desktop-ui .status-bar { -fx-background-color: #eeeeee; -fx-padding: 7 24; -fx-border-color: #d1d1d1 transparent transparent transparent; }
+.desktop-ui .status-bar .label { -fx-text-fill: #505050; }
+.desktop-ui .card, .desktop-ui .surface, .desktop-ui .login-card {
+    -fx-background-color: transparent; -fx-background-radius: 0;
+    -fx-border-color: transparent; -fx-border-radius: 0; -fx-padding: 0;
+}
+.desktop-ui.login-card { -fx-background-color: #ffffff; -fx-padding: 28; -fx-border-color: #d0d0d0; -fx-background-radius: 3; -fx-border-radius: 3; }
+.desktop-ui .button, .desktop-ui .menu-button, .desktop-ui .toggle-button {
+    -fx-background-color: #fafafa; -fx-text-fill: #2b2b2b; -fx-border-color: #bfc2c5;
+    -fx-background-radius: 3; -fx-border-radius: 3; -fx-padding: 6 12;
+}
+.desktop-ui .button:hover, .desktop-ui .menu-button:hover { -fx-background-color: #e6e6e6; }
+.desktop-ui .button.primary { -fx-background-color: #50585f; -fx-border-color: #50585f; -fx-text-fill: white; }
+.desktop-ui .button.primary:hover { -fx-background-color: #3b4248; }
+.desktop-ui .button.danger { -fx-text-fill: #9a2929; -fx-border-color: #c8a3a3; }
+.desktop-ui .button.small { -fx-padding: 4 8; -fx-font-size: 12px; }
+.desktop-ui .text-field, .desktop-ui .text-area, .desktop-ui .combo-box, .desktop-ui .date-picker, .desktop-ui .spinner {
+    -fx-background-color: white; -fx-border-color: #c6c8ca; -fx-background-radius: 2; -fx-border-radius: 2;
+}
+.desktop-ui .text-field { -fx-padding: 6 8; }
+.desktop-ui .text-area .content { -fx-background-radius: 0; }
+.desktop-ui .table-view { -fx-background-color: white; -fx-border-color: #bfc2c5; -fx-background-radius: 0; -fx-border-radius: 0; -fx-padding: 0; }
+.desktop-ui .table-view .column-header-background, .desktop-ui .table-view .column-header, .desktop-ui .table-view .filler { -fx-background-color: #dedfe0; }
+.desktop-ui .table-view .column-header { -fx-size: 32; -fx-border-color: transparent #bfc2c5 #bfc2c5 transparent; -fx-border-width: 0 1 1 0; }
+.desktop-ui .table-view .column-header .label { -fx-text-fill: #272727; -fx-font-size: 12px; -fx-font-weight: bold; -fx-padding: 0 8; }
+.desktop-ui .table-row-cell { -fx-cell-size: 34; -fx-background-color: #ffffff; -fx-border-width: 0; }
+.desktop-ui .table-row-cell:odd { -fx-background-color: #f0f0f0; }
+.desktop-ui .table-row-cell:filled:hover { -fx-background-color: #e4e8eb; }
+.desktop-ui .table-row-cell:filled:selected { -fx-background-color: #d4dde5; }
+.desktop-ui .table-row-cell:empty { -fx-background-color: white; }
+.desktop-ui .table-view .table-cell { -fx-padding: 6 8; -fx-text-fill: #252525; -fx-border-color: transparent #dedede #dedede transparent; -fx-border-width: 0 1 1 0; }
+.desktop-ui .table-view .placeholder .label { -fx-text-fill: #707070; }
+.desktop-ui .badge { -fx-background-color: transparent; -fx-padding: 0; -fx-text-fill: #404040; -fx-font-weight: normal; }
+.desktop-ui .tab-pane > .tab-header-area { -fx-padding: 0 0 12 0; }
+.desktop-ui .tab-pane > .tab-header-area > .headers-region > .tab { -fx-padding: 7 20; }
+.desktop-ui .tab-pane > .tab-header-area > .headers-region > .tab:selected { -fx-border-color: transparent transparent #50585f transparent; }
+.desktop-ui .tab-pane .tab-label { -fx-font-size: 13px; -fx-text-fill: #555555; }
+.desktop-ui .tab-pane .tab:selected .tab-label { -fx-text-fill: #222222; }
+.desktop-ui .titled-pane > .title { -fx-background-color: #e7e7e7; -fx-padding: 7 10; }
+.desktop-ui .titled-pane > .content { -fx-background-color: #f5f5f5; -fx-border-color: #c8c8c8; -fx-padding: 10; }
+.desktop-ui.dialog-pane { -fx-background-color: #f5f5f5; }
+.desktop-ui.dialog-pane > .header-panel { -fx-background-color: #f5f5f5; }
+.desktop-ui .login-card { -fx-background-color: #ffffff; -fx-padding: 28; -fx-border-color: #d0d0d0; -fx-background-radius: 3; -fx-border-radius: 3; }
+.desktop-ui .offer-panel { -fx-background-color: white; -fx-padding: 20; -fx-border-color: #d0d0d0; -fx-border-radius: 2; -fx-background-radius: 2; }
+.desktop-ui .question-navigator { -fx-background-color: #e7e7e7; -fx-padding: 20 14; -fx-border-color: transparent #d1d1d1 transparent transparent; }
+.desktop-ui .question-card { -fx-background-color: white; -fx-padding: 20; -fx-border-color: #d0d0d0; -fx-border-radius: 2; -fx-background-radius: 2; }
+.desktop-ui .question-card .label, .desktop-ui .question-card .radio-button { -fx-font-size: 15px; -fx-text-fill: #242424; }
+.desktop-ui .question-card .radio-button { -fx-padding: 7 4; }
+.desktop-ui .timer { -fx-background-color: #e3e3e3; -fx-text-fill: #242424; -fx-background-radius: 3; -fx-padding: 8 12; -fx-font-size: 19px; }
+.desktop-ui .timer.urgent { -fx-background-color: #fff0f0; -fx-text-fill: #a12626; }
+.desktop-ui .score { -fx-font-size: 28px; -fx-text-fill: #242424; }
+.desktop-ui .button.question-link { -fx-padding: 4 2; -fx-font-size: 12px; }
+.desktop-ui .button.question-link.answered { -fx-background-color: #e1eee5; -fx-border-color: #9bb8a4; -fx-text-fill: #245738; }
+.desktop-ui .button.question-link.flagged { -fx-background-color: #fff0cb; -fx-border-color: #cbb06d; -fx-text-fill: #735800; }

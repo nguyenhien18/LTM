@@ -17,7 +17,8 @@ public final class TeacherLoginPane extends VBox {
 
     public TeacherLoginPane(TeacherAccountService accounts, Consumer<TeacherIdentity> onLogin) {
         super(12);
-        setMaxWidth(500);
+        AppUi.desktopStyle(this);
+        setMaxWidth(420);
         setMaxHeight(Region.USE_PREF_SIZE);
         getStyleClass().add("login-card");
         Label title = new Label("Đăng nhập giáo viên");
@@ -51,7 +52,7 @@ public final class TeacherLoginPane extends VBox {
                 message.setText("Đã tạo tài khoản " + created.username() + ". Nhập mật khẩu để đăng nhập."); password.requestFocus();
             }, ex -> { if (!disposed) { setDisable(false); message.setText(ex.getMessage()); } });
         }));
-        getChildren().addAll(AppUi.label("LAN EXAM · GIẢNG VIÊN", "eyebrow"), title, guide,
+        getChildren().addAll(title,
                 new Label("Tên đăng nhập"), username, new Label("Mật khẩu"), password, login, create, message);
     }
     public void dispose() { disposed = true; password.clear(); }
