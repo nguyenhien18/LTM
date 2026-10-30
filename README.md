@@ -86,6 +86,10 @@ Nhập IP của máy giảng viên, cổng 5000, MSV và ngày sinh đúng danh 
 7. Kiểm tra danh sách/kết nối rồi bấm **Bắt đầu thi**. Đây là lúc đồng hồ chung bắt đầu; chuẩn bị chưa tính giờ.
 8. Theo dõi, chờ nộp/hết giờ, vào **Kết quả** để lọc và xuất CSV. Chờ ca trước hết hạn và chấm xong mới mở ca tiếp theo.
 
+Bảng **Kết quả** và CSV có đủ thí sinh theo danh sách ca đã chốt, kèm trạng thái Chưa vào bài / Đang làm / Đang chấm / Đã nộp / Hết giờ — đã chấm / Vắng thi. Chỉ kết luận vắng sau hạn và khi chưa từng vào bài. Người vắng hoặc chưa có kết quả để trống điểm, số câu đúng và thời gian nộp; bài đã chấm được 0 vẫn ghi `0.00`. Sinh viên nhập bổ sung sau lúc mở ca không được thêm vào báo cáo ca đó. Bản ghi tự chấm hết giờ được lưu riêng để phân biệt với nộp chủ động. Với ca cũ chưa lưu danh sách và không chia ca, chỉ khôi phục được các bài nộp đã có, không suy diễn danh sách vắng từ lớp hiện tại. Bấm Làm mới để cập nhật kết quả trước khi xuất.
+
+**Danh sách lớp và danh sách ca thi:** khi bấm Bắt đầu thi, Server chốt danh sách của lượt thi trong cùng giao dịch với thời hạn và mã đề, áp dụng cả 1 mã lẫn nhiều mã. Danh sách thay đổi sau bước chuẩn bị thì phải chuẩn bị lại. Sinh viên nhập thêm sau khi mở ca vẫn thuộc lớp nhưng chờ lượt sau; danh sách đã chốt được giữ khi khởi động lại Server. Các lượt thi đã mở bằng phiên bản cũ chưa có bản chốt này tiếp tục dùng cơ chế cũ.
+
 Ví dụ 60 sinh viên STT 1–60, 30 người/ca: ca 1 gồm STT 1–30, ca 2 gồm STT 31–60. Hệ thống sắp theo STT CSV tăng dần; khoảng trống STT được giữ nguyên. Danh sách ca được chốt trong database; nhập lại CSV không tự thay danh sách ca đã chia. Có thể chia lại trước khi đợt bắt đầu; đợt đã bắt đầu cần hoàn tất các ca trước khi tạo đợt mới. Nếu chưa chia ca có thể thi cả lớp.
 
 ## CSV sinh viên
@@ -104,6 +108,8 @@ STT,MSV,Họ và tên,Ngày sinh,Lớp
 - STT lưu riêng theo lớp, phải dương và không trùng khi có giá trị. Nhập lại CSV có STT sẽ cập nhật theo MSV; không đánh số theo mã sinh viên hoặc vị trí hiển thị.
 - Nếu STT hiện **—**, dùng **Bổ sung STT từ CSV**. Mẫu ba cột cũ/STT trống vẫn nhập được nhưng cần bổ sung đủ STT trước khi chia ca.
 - Lỗi cấu trúc, trùng MSV hoặc xung đột họ tên/ngày sinh/lớp chính quy bị chặn; không nhập dở dang hoặc ghi đè hồ sơ dùng chung.
+
+Trong **Lớp & sinh viên**, bấm họ tên để sửa họ tên, ngày sinh hoặc lớp chính quy. MSV giữ cố định; cần xác nhận vì hồ sơ dùng chung ở mọi lớp, kể cả lớp của giảng viên khác. Ngày sinh sau khi sửa được dùng đăng nhập; STT riêng từng lớp và bản chốt danh sách ca không thay đổi. Chỉ sửa sinh viên thuộc lớp mình quản lý; Server chặn khi có lượt thi chưa nộp/đang chấm ở bất kỳ lớp nào, hoặc hồ sơ đã được người khác sửa trong lúc mở cửa sổ.
 
 ## Nhập câu hỏi từ Word
 
@@ -152,7 +158,9 @@ Mỗi message là một dòng JSON UTF-8 `{type,payload}`. Luồng chính: `LOGI
 
 Server dùng virtual thread, FIFO cho từng kết nối và giới hạn 16 yêu cầu xử lý đồng thời; outbox và timeout ghi riêng. Client gửi heartbeat mỗi 5 giây, timeout đọc 20 giây. Một MSV có một phiên hiện hành; đăng nhập mới thay phiên cũ.
 
-CSDL có 13 bảng phục vụ thi: tài khoản, môn/lớp/thành viên, ngân hàng, đề/câu chốt, ca/thành viên ca, lượt làm, bài nộp và đáp án. Hai bảng thực hành cũ được giữ để đọc lịch sử; ứng dụng không xóa dữ liệu cũ hoặc tự gán dữ liệu chưa có chủ cho giảng viên mới.
+CSDL có 14 bảng phục vụ thi: tài khoản, môn/lớp/thành viên, ngân hàng, đề/câu chốt, ca/thành viên ca, lượt làm, bài nộp, đáp án và khóa sinh viên theo giảng viên. Hai bảng thực hành cũ được giữ để đọc lịch sử; ứng dụng không xóa dữ liệu cũ hoặc tự gán dữ liệu chưa có chủ cho giảng viên mới.
+
+Giảng viên chỉ cho đăng nhập và khóa/mở khóa sinh viên có trong ít nhất một lớp học phần của mình. Khóa lưu theo cặp giảng viên–sinh viên trong `teacher_student_locks`: nếu sinh viên học cả A và B, A khóa không chặn sinh viên vào Server của B; B không thể gỡ khóa do A đặt. Danh sách tài khoản bị khóa chỉ hiển thị khóa của giảng viên đang đăng nhập. Cờ khóa toàn cục ở dữ liệu phiên bản cũ được giữ để tương thích, không tự chuyển thành khóa của giảng viên mới.
 
 ## Kiểm thử
 
@@ -167,4 +175,4 @@ Có test 80 socket cùng tồn tại trên loopback; kết quả đó không tha
 
 ## Giới hạn
 
-Xác thực sinh viên bằng ngày sinh còn yếu và TCP chưa TLS; phù hợp BTL/demo trên LAN tin cậy. Cảnh báo do giảng viên gửi thủ công, không giám sát màn hình. Chưa có thi ngoại tuyến, tự reconnect, ACK riêng từng lần lưu, gia hạn cá nhân hoặc kết thúc sớm. Khóa sinh viên có phạm vi toàn tài khoản trên database.
+Xác thực sinh viên bằng ngày sinh còn yếu và TCP chưa TLS; phù hợp BTL/demo trên LAN tin cậy. Cảnh báo do giảng viên gửi thủ công, không giám sát màn hình. Chưa có thi ngoại tuyến, tự reconnect, ACK riêng từng lần lưu, gia hạn cá nhân hoặc kết thúc sớm. Khóa sinh viên áp dụng cho mọi lớp của giảng viên đặt khóa, cần giảng viên đó mở khóa để đăng nhập lại.

@@ -51,7 +51,19 @@ public final class ClassManager extends BorderPane {
         roster.setId("class-roster");
         roster.getColumns().add(UiSupport.column("STT", 60, s -> s.ordinal() == null ? "—" : s.ordinal().toString()));
         roster.getColumns().add(UiSupport.column("Mã sinh viên", 170, ClassService.RosterStudent::code));
-        roster.getColumns().add(UiSupport.column("Họ và tên", 260, ClassService.RosterStudent::fullName));
+        var names = UiSupport.<ClassService.RosterStudent>column("Họ và tên · bấm để sửa", 260, ClassService.RosterStudent::fullName);
+        names.setCellFactory(column -> new TableCell<>() {
+            private final Hyperlink link = new Hyperlink();
+            { link.setStyle("-fx-padding: 0;"); link.setOnAction(e -> {
+                var row = getTableRow().getItem();
+                if (row != null && classes.getValue() != null) editProfile(classes.getValue(), row);
+            }); }
+            @Override protected void updateItem(String value, boolean empty) {
+                super.updateItem(value, empty); setText(null);
+                link.setText(empty ? "" : value); setGraphic(empty ? null : link);
+            }
+        });
+        roster.getColumns().add(names);
         roster.getColumns().add(UiSupport.column("Ngày sinh", 120, s -> RosterCsv.displayDate(s.birthDate())));
         roster.getColumns().add(UiSupport.column("Lớp chính quy", 140, s -> s.regularClass() == null ? "" : s.regularClass()));
         roster.getColumns().add(UiSupport.column("Kết nối hiện tại", 190, s -> sessions.stream()
@@ -70,6 +82,40 @@ public final class ClassManager extends BorderPane {
         sessions.addListener(sessionListener); reload(null);
     }
     public void dispose() { disposed = true; rosterVersion++; sessions.removeListener(sessionListener); }
+    private void editProfile(ClassInfo group, ClassService.RosterStudent student) {
+        Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.style(dialog.getDialogPane());
+        dialog.setTitle("Sửa hồ sơ sinh viên"); dialog.getDialogPane().setId("student-profile-editor");
+        TextField code = new TextField(student.code()); code.setEditable(false); code.setId("student-profile-code");
+        TextField name = new TextField(student.fullName()); name.setId("student-profile-name");
+        DatePicker birth = new DatePicker(student.birthDate()); birth.setId("student-profile-birth");
+        TextField regular = new TextField(student.regularClass()); regular.setId("student-profile-regular-class");
+        Label original = new Label("Thông tin hiện tại: " + student.fullName() + " · " + RosterCsv.displayDate(student.birthDate())
+                + " · " + (student.regularClass() == null ? "Chưa có lớp chính quy" : student.regularClass())); original.setWrapText(true);
+        Label note = new Label("Hồ sơ dùng chung: thay đổi sẽ cập nhật ở mọi lớp học phần của sinh viên, kể cả lớp của giảng viên khác. Ngày sinh mới dùng để đăng nhập. STT của từng lớp và danh sách ca đã chốt giữ nguyên."); note.setWrapText(true);
+        CheckBox confirm = new CheckBox("Tôi xác nhận cập nhật hồ sơ dùng chung"); confirm.setId("student-profile-confirm");
+        Label error = new Label(); error.setId("student-profile-error"); error.setWrapText(true); error.getStyleClass().add("error-text");
+        dialog.getDialogPane().setContent(new VBox(10, original, new Label("Mã sinh viên"), code,
+                new Label("Họ và tên"), name, new Label("Ngày sinh"), birth, new Label("Lớp chính quy"), regular, note, confirm, error));
+        dialog.getDialogPane().setPrefWidth(580);
+        ButtonType save = new ButtonType("Lưu thay đổi", ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setText("Hủy");
+        var saveButton = dialog.getDialogPane().lookupButton(save); saveButton.setId("student-profile-save");
+        saveButton.disableProperty().bind(confirm.selectedProperty().not());
+        saveButton.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+            e.consume();
+            final java.time.LocalDate date;
+            try { birth.commitValue(); date = birth.getValue(); }
+            catch (RuntimeException ex) { error.setText("Ngày sinh không hợp lệ."); return; }
+            String fullName = name.getText(), regularClass = regular.getText();
+            dialog.getDialogPane().setDisable(true);
+            UiSupport.async("update-student-profile", () -> service.updateProfile(group.id(), student, fullName, date, regularClass), saved -> {
+                dialog.setResult(true); dialog.close();
+                if (!disposed) { loadRoster(); changed.run(); }
+            }, ex -> { dialog.getDialogPane().setDisable(false); error.setText(ex.getMessage()); });
+        });
+        dialog.showAndWait();
+    }
     private void reload(Long selectedId) {
         Long id = selectedId != null ? selectedId : classes.getValue() == null ? null : classes.getValue().id();
         run("load-classes", service::list, items -> {

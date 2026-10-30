@@ -199,6 +199,56 @@ class ExamWorkflowUiTest {
     }
 
     @Test
+    void clickingStudentNameEditsSharedProfileWithExplicitConfirmation() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:profile_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var bank = new QuestionBankService(factory::createEntityManager);
+            var classes = new ClassService(factory::createEntityManager, null);
+            var group = classes.create("PROFILE", "Nhóm thử", "HK1", bank.createSubject("Mạng").id());
+            classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n9,EDIT001,Nguyễn An,12/05/2003,C1"));
+            ClassManager[] view = new ClassManager[1];
+            Stage stage = fx(() -> {
+                var s = new Stage(); view[0] = new ClassManager(s, classes, bank, FXCollections.observableArrayList(), () -> {});
+                s.setScene(com.ptit.lanexam.common.ui.AppUi.scene(view[0], 1100, 680)); s.show(); return s;
+            });
+            try {
+                awaitFx(() -> stage.getScene().lookup("#class-roster") instanceof TableView<?> table && table.getItems().size() == 1);
+                fx(() -> {
+                    stage.getScene().getRoot().applyCss(); stage.getScene().getRoot().layout();
+                    Hyperlink name = (Hyperlink) stage.getScene().lookup("#class-roster").lookupAll(".hyperlink").stream()
+                            .filter(n -> n instanceof Hyperlink link && link.getText().equals("Nguyễn An")).findFirst().orElseThrow();
+                    Platform.runLater(name::fire); return null;
+                });
+                awaitFx(() -> notice("#student-profile-editor") != null);
+                fx(() -> {
+                    var pane = notice("#student-profile-editor");
+                    assertFalse(((TextField) pane.lookup("#student-profile-code")).isEditable());
+                    assertTrue(pane.lookup("#student-profile-save").isDisabled());
+                    ((TextField) pane.lookup("#student-profile-name")).setText(" ");
+                    ((CheckBox) pane.lookup("#student-profile-confirm")).setSelected(true);
+                    ((Button) pane.lookup("#student-profile-save")).fire(); return null;
+                });
+                awaitFx(() -> !((Label) notice("#student-profile-editor").lookup("#student-profile-error")).getText().isBlank());
+                fx(() -> {
+                    var pane = notice("#student-profile-editor");
+                    ((TextField) pane.lookup("#student-profile-name")).setText("Nguyễn Văn An");
+                    ((DatePicker) pane.lookup("#student-profile-birth")).setValue(LocalDate.of(2003, 5, 17));
+                    ((TextField) pane.lookup("#student-profile-regular-class")).setText("C2");
+                    ((Button) pane.lookup("#student-profile-save")).fire(); return null;
+                });
+                awaitFx(() -> notice("#student-profile-editor") == null
+                        && ((TableView<?>) stage.getScene().lookup("#class-roster")).getItems().size() == 1
+                        && "Nguyễn Văn An".equals(((TableView<?>) stage.getScene().lookup("#class-roster")).getColumns().get(2).getCellData(0)));
+                assertEquals(9, classes.roster(group.id()).getFirst().ordinal());
+                assertTrue(new AuthService(factory::createEntityManager).authenticate("EDIT001", "2003-05-17").isPresent());
+            } finally { fx(() -> { view[0].dispose(); stage.close(); return null; }); }
+        }
+    }
+
+    @Test
     void schoolCsvPreviewShowsFiveColumnsAndCommitsRegularClass() throws Exception {
         try (EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
                 "jakarta.persistence.jdbc.driver", "org.h2.Driver",
@@ -464,6 +514,76 @@ class ExamWorkflowUiTest {
             } finally {
                 fx(() -> { first.stop(); resumed.stop(); for (Stage s : students) if (s != null) s.close(); app.stop(); teacherStage.close(); return null; });
             }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void fullClassPreparationExpiresOnRosterChangeAndOpenedUiUsesFrozenRoster() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:frozen_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gvfrozen", "Giảng viên", "Matkhau123!");
+            var bank = new QuestionBankService(factory::createEntityManager, teacher.id());
+            var subject = bank.createSubject("Mạng");
+            var classes = new ClassService(factory::createEntityManager, teacher.id());
+            var group = classes.create("FROZEN", "Nhóm thi", "HK1", subject.id());
+            classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,FR001,Sinh viên một,12/05/2003,C1"));
+            var question = bank.createQuestion(new BankQuestionDraft(subject.id(), 1,
+                    new ExamDraft.QuestionDraft("Giao thức?", QuestionType.MULTIPLE_CHOICE, "TCP", "UDP", "IP", "ICMP", "A")));
+            var exams = new ExamService(factory::createEntityManager, teacher.id());
+            exams.createExamFromBank(new BankExamDraft("Đề thử", 1, subject.id(), List.of(question.id())));
+            var app = new ServerApp(factory::createEntityManager, () -> {}, 0);
+            Stage stage = fx(() -> { var s = new Stage(); app.start(s); return s; });
+            try {
+                awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+                loginTeacherInUi(stage, "gvfrozen");
+                fx(() -> { ((Button) stage.getScene().lookup("#server-start")).fire(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#server-stop").isDisabled()
+                        && !stage.getScene().lookup("#exam-prepare").isDisabled());
+                fx(() -> {
+                    ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValueFactory().setValue(1);
+                    ((Button) stage.getScene().lookup("#exam-prepare")).fire(); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled());
+                classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n2,FR002,Sinh viên hai,12/05/2003,C1"));
+                awaitFx(() -> stage.getScene().lookup("#exam-start").isDisabled()
+                        && ((TableView<?>) stage.getScene().lookup("#exam-roster")).getItems().isEmpty());
+                fx(() -> { ((Button) stage.getScene().lookup("#exam-prepare")).fire(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled()
+                        && ((TableView<?>) stage.getScene().lookup("#exam-roster")).getItems().size() == 2);
+                fx(() -> { ((Button) stage.getScene().lookup("#exam-start")).fire(); return null; });
+                awaitFx(() -> stage.getScene().lookup("#exam-start").isDisabled()
+                        && !stage.getScene().lookup("#exam-prepare").isDisabled());
+                classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n3,FR003,Sinh viên ba,12/05/2003,C1"));
+                fx(() -> { ((Button) stage.getScene().lookup("#exam-prepare")).fire(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#exam-prepare").isDisabled()
+                        && ((TableView<?>) stage.getScene().lookup("#exam-roster")).getItems().size() == 2);
+                fx(() -> { assertTrue(stage.getScene().lookup("#exam-start").isDisabled()); return null; });
+                assertTrue(exams.findOffer("FR003", exams.getActiveExam().getId()).isEmpty());
+                fx(() -> { ((Button) stage.getScene().lookup("#nav-results")).fire(); return null; });
+                awaitFx(() -> stage.getScene().lookup("#teacher-results") instanceof TableView<?> table && table.getItems().size() == 2
+                        && !stage.getScene().lookup("#results-refresh").isDisabled());
+                fx(() -> {
+                    var table = (TableView<?>) stage.getScene().lookup("#teacher-results");
+                    assertEquals("Chưa vào bài", table.getColumns().stream().filter(c -> c.getText().equals("Trạng thái")).findFirst().orElseThrow().getCellData(0));
+                    assertEquals("", table.getColumns().stream().filter(c -> c.getText().equals("Điểm")).findFirst().orElseThrow().getCellData(0));
+                    return null;
+                });
+                expireUiRound(factory);
+                fx(() -> { ((Button) stage.getScene().lookup("#results-refresh")).fire(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#results-refresh").isDisabled()
+                        && "Vắng thi".equals(((TableView<?>) stage.getScene().lookup("#teacher-results")).getColumns().stream()
+                        .filter(c -> c.getText().equals("Trạng thái")).findFirst().orElseThrow().getCellData(0)));
+                fx(() -> {
+                    var table = (TableView<?>) stage.getScene().lookup("#teacher-results");
+                    assertEquals(2, table.getItems().size());
+                    assertEquals("", table.getColumns().stream().filter(c -> c.getText().equals("Nộp lúc")).findFirst().orElseThrow().getCellData(0));
+                    assertFalse(stage.getScene().lookup("#results-export").isDisabled()); return null;
+                });
+            } finally { fx(() -> { app.stop(); stage.close(); return null; }); }
         }
     }
 

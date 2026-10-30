@@ -161,9 +161,9 @@ public class ClientHandler implements Runnable {
         }
 
         Student s = student.get();
-        if (s.isAccountLocked()) {
+        if (authService.isAccountLocked(s.getStudentCode())) {
             send(JsonUtil.message(MessageType.LOGIN_RESULT, new LoginResponse(false,
-                    "Tài khoản đã bị khóa. Lý do: " + s.getLockReason() + ". Liên hệ giảng viên để mở khóa.", null)));
+                    "Tài khoản đã bị khóa bởi giảng viên này. Lý do: " + authService.accountLockReason(s.getStudentCode()).orElse("Liên hệ giảng viên") + ".", null)));
             return;
         }
         studentCode = s.getStudentCode();

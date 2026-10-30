@@ -37,6 +37,10 @@ public class Exam extends TeacherOwned {
 
     @Lob @Column(name = "variants_json", columnDefinition = "MEDIUMTEXT")
     private String variantsJson;
+    @Lob @Column(name = "roster_json", columnDefinition = "MEDIUMTEXT")
+    private String rosterJson;
+    public String getRosterJson() { return rosterJson; }
+    public void setRosterJson(String value) { rosterJson = value; }
     public String getVariantsJson() { return variantsJson; }
     public void setVariantsJson(String value) { variantsJson = value; }
 

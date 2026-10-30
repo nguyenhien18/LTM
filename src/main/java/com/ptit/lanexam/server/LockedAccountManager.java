@@ -43,7 +43,7 @@ public final class LockedAccountManager {
             message.setText("Đang tải...");
             UiSupport.async("load-locked-accounts", auth::listLockedAccounts, accounts -> {
                 table.getItems().setAll(accounts);
-                message.setText(accounts.size() + " tài khoản bị khóa. Mở khóa cho phép sinh viên đăng nhập lại.");
+                message.setText(accounts.size() + " sinh viên bị bạn khóa. Mở khóa cho phép đăng nhập lại vào Server của bạn.");
                 actions.setDisable(false);
             }, ex -> { actions.setDisable(false); message.setText("Không tải được: " + ex.getMessage()); });
         };

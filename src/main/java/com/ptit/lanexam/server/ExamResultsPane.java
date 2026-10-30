@@ -35,11 +35,12 @@ final class ExamResultsPane extends BorderPane {
         table.getColumns().add(UiSupport.column("Mã SV", 130, ExamResultRow::studentCode));
         table.getColumns().add(UiSupport.column("Mã đề", 70, r -> r.variantCode() == null ? "Gốc" : r.variantCode()));
         table.getColumns().add(UiSupport.column("Họ tên", 180, ExamResultRow::fullName));
+        table.getColumns().add(UiSupport.column("Trạng thái", 170, r -> r.status().toString()));
         table.getColumns().add(UiSupport.column("Đề / Lớp", 270, ExamResultRow::examTitle));
-        table.getColumns().add(UiSupport.column("Điểm", 85, r -> String.format(Locale.ROOT, "%.2f", r.score())));
-        table.getColumns().add(UiSupport.column("Đúng", 70, r -> r.correct() + "/" + r.total()));
-        table.getColumns().add(UiSupport.column("Nộp lúc", 160, r -> r.submittedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"))));
-        table.setPlaceholder(new Label("Chưa có bài nộp phù hợp với bộ lọc."));
+        table.getColumns().add(UiSupport.column("Điểm", 85, r -> r.score() == null ? "" : String.format(Locale.ROOT, "%.2f", r.score())));
+        table.getColumns().add(UiSupport.column("Đúng", 70, r -> r.correct() == null ? "" : r.correct() + "/" + r.total()));
+        table.getColumns().add(UiSupport.column("Nộp lúc", 160, r -> r.submittedAt() == null ? "" : r.submittedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"))));
+        table.setPlaceholder(new Label("Chưa có danh sách ca thi phù hợp với bộ lọc."));
         refresh.setOnAction(e -> reload());
         export.setOnAction(e -> {
             FileChooser chooser = new FileChooser(); chooser.setTitle("Xuất bảng điểm đang lọc"); chooser.setInitialFileName("ket-qua-thi.csv");
@@ -47,7 +48,7 @@ final class ExamResultsPane extends BorderPane {
             var file = chooser.showSaveDialog(owner); if (file == null) return;
             List<ExamResultRow> rows = List.copyOf(filtered); export.setDisable(true);
             UiSupport.async("export-exam-results", () -> { Files.writeString(file.toPath(), ExamResultsCsv.format(rows), StandardCharsets.UTF_8); return file.getAbsolutePath(); },
-                    path -> { if (!disposed) { status.setText("Đã xuất " + rows.size() + " bài: " + path); export.setDisable(filtered.isEmpty()); } },
+                    path -> { if (!disposed) { status.setText("Đã xuất " + rows.size() + " dòng thí sinh: " + path); export.setDisable(filtered.isEmpty()); } },
                     ex -> { if (!disposed) { status.setText(ex.getMessage()); export.setDisable(filtered.isEmpty()); } });
         });
         VBox content = new VBox(14, AppUi.toolbar(group, round, AppUi.spacer(), refresh, export), table, status);
@@ -56,7 +57,7 @@ final class ExamResultsPane extends BorderPane {
     void reload() {
         if (disposed) return; refresh.setDisable(true);
         record Data(List<ClassInfo> groups, List<ExamResultRow> results) {}
-        UiSupport.async("load-exam-results", () -> new Data(classes.list(), exams.listResults()), data -> {
+        UiSupport.async("load-exam-results", () -> new Data(classes.list(), exams.listRoundResults()), data -> {
             if (disposed) return;
             Long classId = group.getValue() == null ? null : group.getValue().id(), roundId = round.getValue() == null ? null : round.getValue().id();
             group.getItems().setAll(new ClassFilter(null, "Tất cả lớp"));
@@ -71,7 +72,9 @@ final class ExamResultsPane extends BorderPane {
     private void filter() {
         ClassFilter g = group.getValue(); RoundFilter r = round.getValue();
         filtered.setPredicate(row -> (g == null || g.id() == null || g.id().equals(row.classId())) && (r == null || r.id() == null || r.id().equals(row.roundId())));
-        status.setText(filtered.size() + " bài nộp"); export.setDisable(filtered.isEmpty());
+        long graded = filtered.stream().filter(row -> row.score() != null).count();
+        long absent = filtered.stream().filter(row -> row.status() == ExamResultRow.Status.ABSENT).count();
+        status.setText(filtered.size() + " dòng thí sinh · " + graded + " đã có điểm · " + absent + " vắng thi"); export.setDisable(filtered.isEmpty());
     }
     void dispose() { disposed = true; }
 }

@@ -31,6 +31,49 @@ class ClassServiceIntegrationTest {
         classB = classes.create("LTM-B", "Nhóm B", "2026 HK1", subjectId).id();
     }
     @AfterEach void close() { factory.close(); }
+    @Test void editingSharedProfileChangesLoginAndAllClassesButPreservesIdentityAndOrdinals() {
+        var rows = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n7,SV001,Nguyễn An,12/05/2003,C1");
+        classes.importRoster(classA, rows);
+        classes.importRoster(classB, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n19,SV001,Nguyễn An,12/05/2003,C1"));
+        var old = classes.roster(classA).getFirst();
+        var saved = classes.updateProfile(classA, old, "Nguyễn Văn An", LocalDate.of(2003, 5, 17), "C2");
+        assertEquals("SV001", saved.code()); assertEquals(7, saved.ordinal());
+        var second = classes.roster(classB).getFirst();
+        assertEquals("Nguyễn Văn An", second.fullName()); assertEquals("C2", second.regularClass()); assertEquals(19, second.ordinal());
+        var auth = new AuthService(factory::createEntityManager, teacherId);
+        assertTrue(auth.authenticate("SV001", "2003-05-12").isEmpty());
+        assertTrue(auth.authenticate("SV001", "2003-05-17").isPresent());
+        try (var em = factory.createEntityManager()) { assertEquals(1L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult()); }
+    }
+    @Test void profileEditingRejectsForeignClassOutsiderInvalidDataAndStaleForm() {
+        classes.importRoster(classA, RosterCsv.parse(CSV));
+        var original = classes.roster(classA).getFirst();
+        assertThrows(IllegalArgumentException.class, () -> other.updateProfile(classA, original, "Sai quyền", original.birthDate(), null));
+        assertThrows(IllegalArgumentException.class, () -> classes.updateProfile(classB, original, "Ngoài lớp", original.birthDate(), null));
+        assertThrows(IllegalArgumentException.class, () -> classes.updateProfile(classA, original, " ", original.birthDate(), null));
+        assertThrows(IllegalArgumentException.class, () -> classes.updateProfile(classA, original, "An", LocalDate.now().plusDays(1), null));
+        assertEquals(original, classes.roster(classA).getFirst());
+        classes.updateProfile(classA, original, "Tên đã sửa", original.birthDate(), "C1");
+        assertThrows(IllegalStateException.class, () -> classes.updateProfile(classA, original, "Ghi đè", original.birthDate(), null));
+        assertEquals("Tên đã sửa", classes.roster(classA).getFirst().fullName());
+    }
+    @Test void profileEditingWaitsForUnfinishedAttemptEvenInAnotherTeachersClass() {
+        classes.importRoster(classA, RosterCsv.parse(CSV));
+        var bank = new QuestionBankService(factory::createEntityManager, otherId);
+        var subject = bank.createSubject("Môn khác");
+        var group = other.create("OTHER", "Lớp khác", "HK1", subject.id());
+        other.importRoster(group.id(), RosterCsv.parse(CSV));
+        var exams = new ExamService(factory::createEntityManager, otherId);
+        var template = exams.createExam(new ExamDraft("Đề thử", 1, List.of(new ExamDraft.QuestionDraft("Chọn A", QuestionType.MULTIPLE_CHOICE, "A", "B", "C", "D", "A"))));
+        var round = exams.activateExam(template.id(), group.id());
+        exams.startAttempt("SV001", round.getId()).orElseThrow();
+        var original = classes.roster(classA).getFirst();
+        assertThrows(IllegalStateException.class, () -> classes.updateProfile(classA, original, "Tên mới", original.birthDate(), "C2"));
+        assertEquals(original, classes.roster(classA).getFirst());
+        exams.submit("SV001", new SubmitExamRequest(round.getId(), Map.of()));
+        assertEquals("Tên mới", classes.updateProfile(classA, original, "Tên mới", original.birthDate(), "C2").fullName());
+        assertEquals("Nguyễn An", exams.rosterForRound(round.getId()).getFirst().fullName());
+    }
     @Test void reusesIdentityAcrossClassesAndRepeatedImportIsIdempotent() {
         var rows = RosterCsv.parse(CSV);
         assertEquals(2, classes.preview(classA, rows).count(ClassService.ImportStatus.CREATE));
@@ -110,6 +153,8 @@ class ClassServiceIntegrationTest {
         Long foreignSubject = new QuestionBankService(factory::createEntityManager, otherId).createSubject("Mạng").id();
         Long foreignClass = other.create("LTM", "Lớp khác", "HK1", foreignSubject).id();
         assertThrows(IllegalArgumentException.class, () -> exams.activateExam(template.id(), foreignClass));
+        assertThrows(IllegalStateException.class, () -> exams.activateExam(template.id(), classA));
+        classes.importRoster(classA, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,SV001,Sinh viên một,12/05/2003,C1"));
         assertNotNull(exams.activateExam(template.id(), classA));
     }
 

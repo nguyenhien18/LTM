@@ -46,6 +46,46 @@ class ExamVariantIntegrationTest {
     }
     private static String snapshot(ExamDto dto) { return JsonUtil.MAPPER.valueToTree(dto.getQuestions()).toString(); }
 
+    @Test void completeRoundReportSeparatesAbsenceFromZeroAndGradesOfflineAttempts() {
+        var round = exams.activateExam(templateId, classId, null, 1);
+        assertEquals(60, exams.listRoundResults().size());
+        assertTrue(exams.listRoundResults().stream().allMatch(r -> r.status() == ExamResultRow.Status.NOT_STARTED && r.score() == null));
+        exams.startAttempt("SV001", round.getId()).orElseThrow();
+        var offline = exams.startAttempt("SV002", round.getId()).orElseThrow();
+        exams.updateAnswers("SV002", new SubmitExamRequest(round.getId(), correct(offline)));
+        exams.submit("SV001", new SubmitExamRequest(round.getId(), Map.of()));
+        classes.importRoster(classId, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n999,SV999,Sinh viên bổ sung,07/11/2005,C1"));
+        assertEquals(ExamResultRow.Status.DOING, exams.listRoundResults().stream().filter(r -> r.studentCode().equals("SV002")).findFirst().orElseThrow().status());
+        clock.now = clock.now.plusSeconds(61);
+        assertEquals(ExamResultRow.Status.GRADING, exams.listRoundResults().stream().filter(r -> r.studentCode().equals("SV002")).findFirst().orElseThrow().status());
+        reopened().finalizeExpiredAttempts();
+        var rows = reopened().listRoundResults();
+        assertEquals(60, rows.size());
+        assertTrue(rows.stream().noneMatch(r -> r.studentCode().equals("SV999")));
+        assertEquals(58, rows.stream().filter(r -> r.status() == ExamResultRow.Status.ABSENT).count());
+        var zero = rows.stream().filter(r -> r.studentCode().equals("SV001")).findFirst().orElseThrow();
+        assertEquals(0.0, zero.score()); assertEquals(ExamResultRow.Status.SUBMITTED, zero.status());
+        var automatic = rows.stream().filter(r -> r.studentCode().equals("SV002")).findFirst().orElseThrow();
+        assertEquals(10.0, automatic.score()); assertEquals(ExamResultRow.Status.EXPIRED, automatic.status());
+        assertTrue(rows.stream().filter(r -> r.status() == ExamResultRow.Status.ABSENT)
+                .allMatch(r -> r.score() == null && r.correct() == null && r.submittedAt() == null));
+        try (var em = factory.createEntityManager()) {
+            assertEquals(2L, em.createQuery("select count(a) from ExamAttempt a", Long.class).getSingleResult());
+            assertEquals(2L, em.createQuery("select count(s) from Submission s", Long.class).getSingleResult());
+        }
+    }
+    @Test void attendanceReportKeepsShiftBoundariesVariantsAndTeacherScope() {
+        var shift = new ExamShiftService(factory::createEntityManager, teacherId, clock).split(classId, 30).getFirst();
+        var round = exams.activateExam(templateId, classId, shift.id(), 4);
+        assertEquals(30, exams.listRoundResults().size());
+        assertTrue(exams.listRoundResults().stream().allMatch(r -> r.variantCode() != null && r.classId().equals(classId) && r.roundId().equals(round.getId())));
+        assertTrue(exams.listRoundResults().stream().noneMatch(r -> r.studentCode().equals("SV031")));
+        assertTrue(new ExamService(factory::createEntityManager).listRoundResults().isEmpty());
+        clock.now = clock.now.plusSeconds(61);
+        assertTrue(reopened().listRoundResults().stream().allMatch(r -> r.status() == ExamResultRow.Status.ABSENT));
+        assertTrue(exams.listResults().isEmpty());
+    }
+
     @Test void drawsExactMatrixWithoutDuplicatesAndReplacesOnlyFromRemainingSameLevel() {
         var selection = bank.drawQuestions(subjectId, matrix, Set.of());
         assertEquals(12, selection.size()); assertEquals(12, selection.stream().map(BankQuestionInfo::id).distinct().count());
@@ -133,6 +173,50 @@ class ExamVariantIntegrationTest {
         classes.importRoster(classId, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n999,SV999,Sinh viên bổ sung,07/11/2005,C1"));
         assertTrue(exams.findOffer("SV999", round.getId()).isEmpty());
         assertThrows(IllegalArgumentException.class, () -> exams.startAttempt("SV999", round.getId()));
+    }
+    @Test void singleCodeRoundFreezesRosterAndRestoresItWithoutChangingDeadlineOrAnswers() {
+        var prepared = classes.roster(classId);
+        var round = exams.activateExam(templateId, classId, null, 1, prepared);
+        var first = exams.startAttempt("SV001", round.getId()).orElseThrow();
+        exams.updateAnswers("SV001", new SubmitExamRequest(round.getId(), correct(first)));
+        classes.importRoster(classId, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n999,SV999,Sinh viên bổ sung,07/11/2005,C1"));
+        var restored = reopened();
+        assertEquals(61, classes.roster(classId).size());
+        assertEquals(prepared, restored.rosterForRound(round.getId()));
+        assertTrue(restored.findOffer("SV999", round.getId()).isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> restored.startAttempt("SV999", round.getId()));
+        assertEquals(round.getId(), restored.recoverPublishedExam().orElseThrow().getId());
+        var resume = restored.startAttempt("SV001", round.getId()).orElseThrow();
+        assertEquals(snapshot(first), snapshot(resume));
+        assertEquals(correct(first), resume.getSavedAnswers());
+        assertEquals(round.getDeadlineEpochMillis(), resume.getDeadlineEpochMillis());
+        assertTrue(restored.findOffer("SV002", round.getId()).isPresent());
+        clock.now = clock.now.plusSeconds(61); restored.finalizeExpiredAttempts();
+        assertEquals("Vắng thi", restored.roundProgress(classId, null).orElseThrow().state("SV002", clock.instant()));
+        assertEquals(10.0, restored.listResults().getFirst().score());
+        var next = restored.activateExam(templateId, classId, null, 1, classes.roster(classId));
+        assertTrue(restored.findOffer("SV999", next.getId()).isPresent());
+    }
+    @Test void changedPreparedRosterRejectsOpeningAtomicallyUntilPreparedAgain() {
+        var prepared = classes.roster(classId);
+        classes.importRoster(classId, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n999,SV999,Sinh viên bổ sung,07/11/2005,C1"));
+        assertThrows(IllegalStateException.class, () -> exams.activateExam(templateId, classId, null, 1, prepared));
+        assertTrue(exams.recoverPublishedExam().isEmpty());
+        try (var em = factory.createEntityManager()) {
+            assertEquals(0L, em.createQuery("select count(e) from Exam e where e.templateExamId is not null", Long.class).getSingleResult());
+        }
+        var round = exams.activateExam(templateId, classId, null, 1, classes.roster(classId));
+        assertEquals(61, exams.rosterForRound(round.getId()).size());
+    }
+    @Test void splitSingleCodeRoundUsesSavedShiftRosterAndKeepsOriginalOrdinals() {
+        var shift = new ExamShiftService(factory::createEntityManager, teacherId, clock).split(classId, 30).getFirst();
+        classes.importRoster(classId, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n999,SV999,Sinh viên bổ sung,07/11/2005,C1"));
+        var prepared = new ExamShiftService(factory::createEntityManager, teacherId, clock).roster(classId, shift.id());
+        var round = exams.activateExam(templateId, classId, shift.id(), 1, prepared);
+        assertEquals(prepared, reopened().rosterForRound(round.getId()));
+        assertEquals(10, reopened().rosterForRound(round.getId()).getFirst().ordinal());
+        assertTrue(reopened().findOffer("SV031", round.getId()).isEmpty());
+        assertTrue(reopened().findOffer("SV999", round.getId()).isEmpty());
     }
     @Test void preservesOptionsThatReferToLettersWhileStillShufflingQuestionOrder() {
         List<Long> ids = new ArrayList<>();

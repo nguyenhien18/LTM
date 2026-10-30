@@ -111,12 +111,17 @@ public class ExamServer {
         return openExam(templateId, classId, shiftId, 1);
     }
     public Publication openExam(Long templateId, Long classId, Long shiftId, int variants) {
+        return openExam(templateId, classId, shiftId, variants, null);
+    }
+    public Publication openExam(Long templateId, Long classId, Long shiftId, int variants,
+                                java.util.List<com.ptit.lanexam.server.service.ClassService.RosterStudent> preparedRoster) {
         if (variants < 1 || variants > 8) throw new IllegalArgumentException("Số mã đề từ 1 đến 8.");
         ExamDto exam;
         attemptGate.writeLock().lock();
         try {
             if (!running) throw new IllegalStateException("Server đã dừng. Không thể mở đề.");
-            exam = variants > 1 ? examService.activateExam(templateId, classId, shiftId, variants)
+            exam = preparedRoster != null ? examService.activateExam(templateId, classId, shiftId, variants, preparedRoster)
+                    : variants > 1 ? examService.activateExam(templateId, classId, shiftId, variants)
                     : shiftId != null ? examService.activateExam(templateId, classId, shiftId)
                     : classId == null ? examService.activateExam(templateId) : examService.activateExam(templateId, classId);
             publishedExamId = exam.getId();

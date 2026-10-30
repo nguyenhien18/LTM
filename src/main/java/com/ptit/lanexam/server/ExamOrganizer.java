@@ -129,11 +129,18 @@ final class ExamOrganizer extends BorderPane {
         if (disposed || busy || progressLoading || roster.getItems().isEmpty() || group.getValue() == null) return;
         long request = version;
         Long classId = group.getValue().id(), shiftId = shift.getValue() == null ? null : shift.getValue().id();
+        boolean checkingPreparation = prepared;
+        List<ClassService.RosterStudent> expected = List.copyOf(roster.getItems());
         progressLoading = true;
-        UiSupport.async("exam-roster-progress", () -> exams.roundProgress(classId, shiftId), result -> {
+        record Checked(java.util.Optional<ExamService.RoundProgress> progress, List<ClassService.RosterStudent> rows) {}
+        UiSupport.async("exam-roster-progress", () -> new Checked(exams.roundProgress(classId, shiftId),
+                checkingPreparation ? shiftId == null ? classes.roster(classId) : shifts.roster(classId, shiftId) : null), result -> {
             progressLoading = false;
             if (disposed || request != version) return;
-            progress = result.orElse(null); roster.refresh(); showShiftState();
+            if (checkingPreparation && !new java.util.HashSet<>(expected).equals(new java.util.HashSet<>(result.rows()))) {
+                invalidatePreparation(); status.setText("Danh sách thi đã thay đổi. Bấm Chuẩn bị ca thi để kiểm tra lại."); return;
+            }
+            progress = result.progress().orElse(null); roster.refresh(); showShiftState();
         }, ex -> {
             progressLoading = false;
             if (!disposed && request == version) status.setText("Chưa cập nhật được trạng thái bài thi: " + ex.getMessage());
@@ -159,17 +166,23 @@ final class ExamOrganizer extends BorderPane {
     private void prepare() {
         ClassInfo selected = group.getValue(); if (selected == null || exam.getValue() == null) return;
         var selectedShift = shift.getValue();
-        long request = ++version; busy = true; updateActions();
+        long request = ++version; prepared = false; busy = true; updateActions();
         record Prepared(List<ClassService.RosterStudent> rows, java.util.Optional<ExamService.RoundProgress> progress) {}
-        UiSupport.async("prepare-exam-roster", () -> new Prepared(selectedShift == null ? classes.roster(selected.id()) : shifts.roster(selected.id(), selectedShift.id()),
-                exams.roundProgress(selected.id(), selectedShift == null ? null : selectedShift.id())), data -> {
+        UiSupport.async("prepare-exam-roster", () -> {
+            var savedProgress = exams.roundProgress(selected.id(), selectedShift == null ? null : selectedShift.id());
+            boolean opened = savedProgress.isPresent() && (selectedShift != null || exams.currentTime().isBefore(savedProgress.get().deadline()));
+            return new Prepared(opened ? exams.rosterForRound(savedProgress.get().roundId())
+                    : selectedShift == null ? classes.roster(selected.id()) : shifts.roster(selected.id(), selectedShift.id()), savedProgress);
+        }, data -> {
             if (disposed || request != version) return;
             var rows = data.rows(); progress = data.progress().orElse(null);
             runningRound = progress == null ? null : progress.roundId();
             deadlineMillis = progress == null || !exams.currentTime().isBefore(progress.deadline()) ? 0 : progress.deadline().toEpochMilli();
-            busy = false; roster.getItems().setAll(rows); prepared = !rows.isEmpty() && (selectedShift == null || selectedShift.roundId() == null); refreshConnections();
-            status.setText(prepared ? "Sẵn sàng. Đồng hồ chỉ chạy sau khi bấm Bắt đầu thi."
-                    : selectedShift != null && selectedShift.roundId() != null ? "Ca đã mở. Server tự khôi phục ca còn hạn khi khởi động; xem tiến độ trong bảng bên dưới."
+            boolean opened = selectedShift != null && selectedShift.roundId() != null
+                    || progress != null && exams.currentTime().isBefore(progress.deadline());
+            busy = false; roster.getItems().setAll(rows); prepared = !rows.isEmpty() && !opened; refreshConnections();
+            status.setText(prepared ? "Sẵn sàng. Bắt đầu thi sẽ chốt danh sách và tính giờ; sinh viên thêm sau chờ lượt tiếp theo."
+                    : opened ? "Ca đã mở, danh sách đã chốt. Sinh viên thêm vào lớp sau đó chờ lượt thi tiếp theo."
                     : "Lớp chưa có sinh viên. Nhập CSV trong Lớp & sinh viên trước.");
         }, this::failed);
     }
@@ -179,14 +192,15 @@ final class ExamOrganizer extends BorderPane {
         Long shiftId = shift.getValue() == null ? null : shift.getValue().id();
         record Started(ExamServer.Publication publication, List<ExamShiftService.ShiftInfo> shifts) {}
         int variants = variantCount.getValue();
-        UiSupport.async("start-lan-exam", () -> new Started(server.get().openExam(templateId, classId, shiftId, variants), shifts.list(classId)), opened -> {
+        var preparedRoster = List.copyOf(roster.getItems());
+        UiSupport.async("start-lan-exam", () -> new Started(server.get().openExam(templateId, classId, shiftId, variants, preparedRoster), shifts.list(classId)), opened -> {
             if (disposed) return; busy = false; prepared = false; updateActions();
             var publication = opened.publication(); setShifts(opened.shifts(), shiftId);
             runningRound = publication.exam().getId(); deadlineMillis = publication.exam().getDeadlineEpochMillis();
             status.setText("Đang thi · Ca #" + publication.exam().getId() + " · Hạn nộp "
                     + UiSupport.time(java.time.Instant.ofEpochMilli(publication.exam().getDeadlineEpochMillis())));
             announce.accept(status.getText()); refreshConnections(); refreshProgress();
-        }, this::failed);
+        }, ex -> { prepared = false; failed(ex); });
     }
     private void updateActions() {
         group.setDisable(busy); exam.setDisable(busy); shift.setDisable(busy || shift.getItems().isEmpty()); capacity.setDisable(busy); variantCount.setDisable(busy);

@@ -76,6 +76,35 @@ public final class ClassService {
                             c.getId(), c.getCode(), c.getName(), c.getSubject().getName(), c.getSemester())).toList();
         }
     }
+    public RosterStudent updateProfile(Long classId, RosterStudent expected, String fullName,
+                                       java.time.LocalDate birthDate, String regularClass) {
+        if (expected == null) throw new IllegalArgumentException("Chọn sinh viên cần sửa.");
+        String name = required(fullName, 120, "Họ tên");
+        String regular = regularClass == null || regularClass.isBlank() ? null : required(regularClass, 80, "Lớp chính quy");
+        if (birthDate == null || birthDate.isAfter(java.time.LocalDate.now()) || birthDate.getYear() < 1900)
+            throw new IllegalArgumentException("Ngày sinh phải hợp lệ, từ năm 1900 đến hôm nay.");
+        try (EntityManager em = managers.get()) {
+            try {
+                em.getTransaction().begin();
+                CourseClass group = requireClass(em, classId, scope);
+                em.lock(group, LockModeType.PESSIMISTIC_WRITE);
+                requireEnrollment(em, classId, expected.code(), scope);
+                Student student = em.createQuery("select s from Student s where s.studentCode = :code", Student.class)
+                        .setParameter("code", expected.code()).setLockMode(LockModeType.PESSIMISTIC_WRITE).getSingleResult();
+                if (!student.getFullName().equals(expected.fullName()) || !student.getBirthDate().equals(expected.birthDate())
+                        || !Objects.equals(student.getRegularClass(), expected.regularClass()))
+                    throw new IllegalStateException("Hồ sơ đã được cập nhật ở nơi khác. Đóng cửa sổ, làm mới danh sách rồi sửa lại.");
+                long unfinished = em.createQuery("select count(a) from ExamAttempt a where a.student = :student and a.submittedAt is null", Long.class)
+                        .setParameter("student", student).getSingleResult();
+                if (unfinished > 0) throw new IllegalStateException("Sinh viên đang có lượt thi chưa kết thúc hoặc đang chấm. Chờ hoàn tất trước khi sửa hồ sơ.");
+                student.setFullName(name); student.setBirthDate(birthDate); student.setRegularClass(regular);
+                Integer ordinal = em.createQuery("select cs from ClassStudent cs where cs.courseClass = :class and cs.student = :student", ClassStudent.class)
+                        .setParameter("class", group).setParameter("student", student).getSingleResult().getOrdinal();
+                RosterStudent result = rosterStudent(student, ordinal);
+                em.getTransaction().commit(); return result;
+            } catch (RuntimeException ex) { if (em.getTransaction().isActive()) em.getTransaction().rollback(); throw ex; }
+        }
+    }
     public ImportPreview preview(Long classId, List<RosterCsv.StudentRow> rows) {
         validate(rows);
         try (EntityManager em = managers.get()) {

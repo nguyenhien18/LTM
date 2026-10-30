@@ -235,6 +235,15 @@ public class ExamService {
         }
     }
 
+    public List<ClassService.RosterStudent> rosterForRound(Long roundId) {
+        try (EntityManager em = entityManagers.get()) {
+            Exam round = em.find(Exam.class, roundId);
+            scope.require(round);
+            var saved = RoundRoster.read(round);
+            return saved != null ? saved : RoundRoster.candidates(em, round.getCourseClass(), round.getShift());
+        }
+    }
+
     public List<ExamSummary> listExams() {
         EntityManager em = entityManagers.get();
         try {
@@ -270,6 +279,11 @@ public class ExamService {
     }
 
     public ExamDto activateExam(Long examId, Long classId, Long shiftId, int variantCount) {
+        return activateExam(examId, classId, shiftId, variantCount, null);
+    }
+
+    public ExamDto activateExam(Long examId, Long classId, Long shiftId, int variantCount,
+                               List<ClassService.RosterStudent> preparedRoster) {
         if (variantCount < 1 || variantCount > ExamVariants.MAX_VARIANTS) throw new IllegalArgumentException("Số mã đề từ 1 đến 8.");
         if (examId == null) throw new IllegalArgumentException("Chưa chọn bài thi.");
         finalizeExpiredAttempts();
@@ -331,6 +345,10 @@ public class ExamService {
             long unfinished = em.createQuery("select count(a) from ExamAttempt a where a.submittedAt is null and " + scope.predicate("a.exam"), Long.class)
                     .getSingleResult();
             if (unfinished > 0) throw new IllegalStateException("Đang chấm các bài của ca cũ. Hãy chờ hoàn tất trước khi mở ca mới.");
+            List<ClassService.RosterStudent> candidates = courseClass == null ? List.of() : RoundRoster.candidates(em, courseClass, shift);
+            if (courseClass != null && candidates.isEmpty()) throw new IllegalStateException("Danh sách thi trống. Nhập sinh viên rồi chuẩn bị lại ca thi.");
+            if (preparedRoster != null && !RoundRoster.same(preparedRoster, candidates))
+                throw new IllegalStateException("Danh sách thi đã thay đổi. Bấm Chuẩn bị ca thi để kiểm tra lại trước khi bắt đầu.");
             em.createQuery("update Exam e set e.active = false where e.active = true and " + scope.predicate("e")).executeUpdate();
             Exam round = new Exam(template.getTitle(), template.getDurationMinutes(), true);
             round.openAt(clock.instant());
@@ -339,15 +357,13 @@ public class ExamService {
             round.setTemplateExamId(template.getId());
             round.setCourseClass(courseClass);
             round.setShift(shift);
+            if (courseClass != null) round.setRosterJson(RoundRoster.write(candidates));
             for (Question question : template.getQuestions())
                 round.addQuestion(question.copyForRound());
             em.persist(round);
             em.flush();
             if (variantCount > 1) {
-                List<String> candidates = shift != null ? shift.getCandidates().stream().map(c -> c.getStudent().getStudentCode()).toList()
-                        : em.createQuery("select cs.student.studentCode from ClassStudent cs where cs.courseClass = :class order by cs.ordinal asc nulls last, cs.student.studentCode", String.class)
-                            .setParameter("class", courseClass).getResultList();
-                round.setVariantsJson(ExamVariants.create(round, variantCount, candidates));
+                round.setVariantsJson(ExamVariants.create(round, variantCount, candidates.stream().map(ClassService.RosterStudent::code).toList()));
             }
             ExamDto result = toDto(round);
             tx.commit();
@@ -373,10 +389,54 @@ public class ExamService {
                     .map(s -> new ExamResultRow(s.getExam().getId(), s.getStudent().getStudentCode(), s.getStudent().getFullName(),
                             classId == null ? resultTitle(s.getExam()) : displayTitle(s.getExam()), s.getScore(),
                             (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
-                            s.getAnswers().size(), s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId(), s.getVariantCode()))
+                            s.getAnswers().size(), s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId(), s.getVariantCode(),
+                            s.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED))
                     .toList();
         } finally {
             em.close();
+        }
+    }
+
+    /** Attendance is read-only: absent students never get synthetic attempts or zero-point submissions. */
+    public List<ExamResultRow> listRoundResults() {
+        try (EntityManager em = entityManagers.get()) {
+            var rounds = em.createQuery("select e from Exam e where e.templateExamId is not null and " + scope.predicate("e") + " order by e.id desc", Exam.class).getResultList();
+            var submissions = em.createQuery("select s from Submission s where " + scope.predicate("s.exam") + " order by s.submittedAt desc", Submission.class).getResultList();
+            record Key(Long round, String student) {}
+            Map<Key, Submission> submitted = new java.util.LinkedHashMap<>();
+            submissions.forEach(s -> submitted.put(new Key(s.getExam().getId(), s.getStudent().getStudentCode()), s));
+            Map<Key, ExamAttempt> attempts = new java.util.HashMap<>();
+            if (!rounds.isEmpty()) em.createQuery("select a from ExamAttempt a where a.exam in :rounds", ExamAttempt.class)
+                    .setParameter("rounds", rounds).getResultList()
+                    .forEach(a -> attempts.put(new Key(a.getExam().getId(), a.getStudent().getStudentCode()), a));
+            List<ExamResultRow> rows = new ArrayList<>();
+            Instant now = clock.instant();
+            for (Exam round : rounds) {
+                var roster = RoundRoster.read(round);
+                if (roster == null && round.getShift() != null) roster = RoundRoster.candidates(em, round.getCourseClass(), round.getShift());
+                // Historical full-class rounds cannot reconstruct an opening roster that was never saved.
+                if (roster == null) continue;
+                for (var student : roster) {
+                    Submission submission = submitted.remove(new Key(round.getId(), student.code()));
+                    ExamAttempt attempt = attempts.get(new Key(round.getId(), student.code()));
+                    ExamResultRow.Status state = submission != null
+                            ? submission.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED
+                            : round.getDeadlineAt() != null && !now.isBefore(round.getDeadlineAt())
+                            ? attempt == null ? ExamResultRow.Status.ABSENT : ExamResultRow.Status.GRADING
+                            : attempt == null ? ExamResultRow.Status.NOT_STARTED : ExamResultRow.Status.DOING;
+                    rows.add(new ExamResultRow(round.getId(), student.code(), student.fullName(), resultTitle(round),
+                            submission == null ? null : submission.getScore(),
+                            submission == null ? null : (int) submission.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
+                            round.getQuestions().size(), submission == null ? null : submission.getSubmittedAt(),
+                            round.getCourseClass() == null ? null : round.getCourseClass().getId(),
+                            submission == null ? ExamVariants.code(round, student.code()) : submission.getVariantCode(), state));
+                }
+            }
+            for (Submission s : submitted.values()) rows.add(new ExamResultRow(s.getExam().getId(), s.getStudent().getStudentCode(), s.getStudent().getFullName(),
+                    resultTitle(s.getExam()), s.getScore(), (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(), s.getAnswers().size(),
+                    s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId(), s.getVariantCode(),
+                    s.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED));
+            return List.copyOf(rows);
         }
     }
 
@@ -419,6 +479,7 @@ public class ExamService {
             if (exam == null || !exam.isActive() || exam.getDeadlineAt() == null
                     || !clock.instant().isBefore(exam.getDeadlineAt())) return Optional.empty();
             scope.require(exam);
+            if (!RoundRoster.eligible(exam, studentCode)) return Optional.empty();
             if (!ClassService.eligible(em, exam.getCourseClass() == null ? null : exam.getCourseClass().getId(), studentCode, scope)) return Optional.empty();
             if (!ExamShiftService.eligible(em, exam, studentCode)) return Optional.empty();
             if (!ExamVariants.eligible(exam, studentCode)) return Optional.empty();
@@ -474,7 +535,7 @@ public class ExamService {
                 throw new IllegalStateException("Đang xử lý đáp án nhận trước hạn; Server sẽ gửi kết quả khi chấm xong.");
             Map<Long, String> answers = attempt.isOpenAt(receivedAt)
                     ? validateAnswers(attempt.getExam(), request.getAnswers()) : savedAnswers(attempt);
-            SubmitResult result = persistSubmission(em, attempt, answers);
+            SubmitResult result = persistSubmission(em, attempt, answers, !receivedAt.isBefore(attempt.getDeadlineAt()));
             tx.commit();
 
             return result;
@@ -492,9 +553,11 @@ public class ExamService {
         try {
             tx.begin();
             Student student = em.createQuery("select s from Student s where s.studentCode = :code", Student.class)
-                    .setParameter("code", studentCode).getSingleResult();
+                    .setParameter("code", studentCode).setLockMode(LockModeType.PESSIMISTIC_WRITE).getSingleResult();
             Exam exam = em.find(Exam.class, examId, LockModeType.PESSIMISTIC_WRITE);
             scope.require(exam);
+            if (!RoundRoster.eligible(exam, studentCode))
+                throw new IllegalArgumentException("Bạn không có tên trong danh sách đã chốt của ca thi này. Hãy chờ lượt thi sau.");
             if (!ExamShiftService.eligible(em, exam, studentCode))
                 throw new IllegalArgumentException("Bạn không có tên trong ca thi này. Hãy chờ đúng ca được phân.");
             if (!ExamVariants.eligible(exam, studentCode)) throw new IllegalArgumentException("Bạn không có trong danh sách đã phân mã đề của ca thi này.");
@@ -616,7 +679,7 @@ public class ExamService {
             }
             if (attempt != null && attempt.getSubmittedAt() == null && !attempt.isOpenAt(clock.instant())) {
                 if (findSubmission(em, attempt).isPresent()) attempt.markSubmitted(clock.instant());
-                else persistSubmission(em, attempt, savedAnswers(attempt));
+                else persistSubmission(em, attempt, savedAnswers(attempt), true);
             }
             tx.commit();
 
@@ -628,11 +691,12 @@ public class ExamService {
         }
     }
 
-    private SubmitResult persistSubmission(EntityManager em, ExamAttempt attempt, Map<Long, String> answers) {
+    private SubmitResult persistSubmission(EntityManager em, ExamAttempt attempt, Map<Long, String> answers, boolean automatic) {
         Exam exam = attempt.getExam();
         int correct = 0;
         Submission submission = new Submission(attempt.getStudent(), exam, 0, LocalDateTime.ofInstant(clock.instant(), java.time.ZoneId.systemDefault()));
         submission.setVariantCode(attempt.getVariantCode());
+        submission.setAutomaticSubmission(automatic);
         var variant = ExamVariants.variant(attempt);
         for (Question question : exam.getQuestions()) {
             String answer = answers.get(question.getId());

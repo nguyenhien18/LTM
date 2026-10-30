@@ -8,6 +8,7 @@
         <class>com.ptit.lanexam.server.entity.ClassStudent</class>
         <class>com.ptit.lanexam.server.entity.ExamShift</class>
         <class>com.ptit.lanexam.server.entity.Teacher</class>
+        <class>com.ptit.lanexam.server.entity.TeacherStudentLock</class>
         <class>com.ptit.lanexam.server.entity.Exam</class>
         <class>com.ptit.lanexam.server.entity.Question</class>
         <class>com.ptit.lanexam.server.entity.Subject</class>

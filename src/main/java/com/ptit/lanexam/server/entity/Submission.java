@@ -11,6 +11,10 @@ import java.util.List;
 public class Submission {
     @Column(name = "variant_code", length = 8)
     private String variantCode;
+    @Column(name = "automatic_submission")
+    private Boolean automaticSubmission;
+    public boolean isAutomaticSubmission() { return Boolean.TRUE.equals(automaticSubmission); }
+    public void setAutomaticSubmission(boolean value) { automaticSubmission = value; }
     public String getVariantCode() { return variantCode; }
     public void setVariantCode(String value) { variantCode = value; }
     @Id

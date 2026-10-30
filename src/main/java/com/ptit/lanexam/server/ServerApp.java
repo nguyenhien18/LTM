@@ -138,7 +138,7 @@ public class ServerApp extends Application {
         examService = new ExamService(entityManagers, identity.id());
         questionBankService = new QuestionBankService(entityManagers, identity.id());
         classService = new ClassService(entityManagers, identity.id());
-        authService = new AuthService(entityManagers);
+        authService = new AuthService(entityManagers, teacher.id());
         showWorkspace();
     }
 
