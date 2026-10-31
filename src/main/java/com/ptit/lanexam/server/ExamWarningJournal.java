@@ -48,7 +48,7 @@ final class ExamWarningJournal {
                 refresh.setDisable(false); table.getItems().setAll(rows);
                 long count = rows.stream().filter(row -> row.kind() == Kind.FOCUS_LOST).count();
                 long pending = rows.stream().filter(row -> row.kind() == Kind.FOCUS_LOST && !row.reviewed()).count();
-                state.setText(count + " lần rời cửa sổ" + (pending >= 3 ? " · Cần kiểm tra" : ""));
+                state.setText(count + " lần rời cửa sổ" + (pending > 0 ? " · Cần kiểm tra" : ""));
                 review.setDisable(pending == 0); suspend.setDisable(!loaded.canSuspend());
                 remind.setDisable(!loaded.canSuspend() || !server.isDoingExam(roundId, code));
             }, ex -> { loading[0] = false; if (!closed[0]) { refresh.setDisable(false); state.setText(ex.getMessage()); } });

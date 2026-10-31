@@ -263,7 +263,7 @@ class ExamWorkflowUiTest {
                     assertTrue(codes.variantCode(code).matches("10[1-4]"));
                 }
                 for (int index = 0; index < 3; index++) exams.events().focusReturned(round.getId(), "ST002", UUID.randomUUID().toString(),
-                        Instant.now().minusSeconds(4), Instant.now());
+                        Instant.now().minusSeconds(5), Instant.now());
                 awaitFx(() -> progressCell(stage, 1, "Cảnh báo").contains("3 lần") && progressCell(stage, 1, "Cảnh báo").contains("Cần kiểm tra"));
                 fx(() -> { ((Button) stage.getScene().lookup("#nav-bank")).fire(); return null; });
                 awaitFx(() -> ((Button) stage.getScene().lookup("#teacher-notifications")).getText().endsWith("1")
@@ -335,7 +335,7 @@ class ExamWorkflowUiTest {
             var round = exams.activateExam(template.id(), group.id());
             for (String code : List.of("ST001", "ST002")) {
                 exams.startAttempt(code, round.getId());
-                for (int i = 0; i < 3; i++) exams.events().focusReturned(round.getId(), code, UUID.randomUUID().toString(), Instant.now().minusSeconds(4), Instant.now());
+                exams.events().focusReturned(round.getId(), code, UUID.randomUUID().toString(), Instant.now().minusSeconds(5), Instant.now());
             }
             var app = new ServerApp(factory::createEntityManager, () -> {}, 0); var client = new ClientApp();
             Stage teacherStage = fx(() -> { var stage = new Stage(); app.start(stage); return stage; }); Stage[] student = new Stage[1];
@@ -343,6 +343,10 @@ class ExamWorkflowUiTest {
                 awaitFx(() -> teacherStage.getScene().lookup("#teacher-login-submit") != null); loginTeacherInUi(teacherStage, "gvdiscipline");
                 awaitFx(() -> ((Button) teacherStage.getScene().lookup("#teacher-notifications")).getText().endsWith("2"));
                 fx(() -> { assertTrue(((Label) teacherStage.getScene().lookup("#teacher-notification-text")).getText().contains("2 sinh viên")); return null; });
+                exams.events().focusReturned(round.getId(), "ST002", UUID.randomUUID().toString(), Instant.now().minusSeconds(5), Instant.now());
+                awaitFx(() -> ((Label) teacherStage.getScene().lookup("#teacher-notification-text")).getText().contains("ST002")
+                        && ((Label) teacherStage.getScene().lookup("#teacher-notification-text")).getText().contains("2 lần"));
+                assertTrue(fx(() -> ((Button) teacherStage.getScene().lookup("#teacher-notifications")).getText().endsWith("2")), "A new episode refreshes the toast, not the number of queued students");
                 student[0] = fx(() -> {
                     var stage = new Stage(); client.start(stage);
                     ((TextField) stage.getScene().lookup("#login-port")).setText(Integer.toString(app.getListeningPort()));
@@ -394,7 +398,7 @@ class ExamWorkflowUiTest {
         });
         try {
             awaitFx(() -> windows[0].isFocused());
-            fx(() -> { monitor[0].start(10L); return null; });
+            fx(() -> { windows[0].setFullScreen(true); monitor[0].start(10L); return null; });
             fx(() -> {
                 windows[1] = new Stage(); windows[1].initOwner(windows[0]); windows[1].setScene(new Scene(new Label("Owned dialog"), 200, 100));
                 windows[1].show(); windows[1].requestFocus(); return null;
@@ -407,14 +411,89 @@ class ExamWorkflowUiTest {
                 windows[2] = new Stage(); windows[2].setScene(new Scene(new Label("Other app"), 200, 100)); windows[2].show(); windows[2].requestFocus(); return null;
             });
             var left = reports.poll(3, TimeUnit.SECONDS); assertNotNull(left); assertFalse(left.focused());
-            var stillAway = reports.poll(5, TimeUnit.SECONDS); assertNotNull(stillAway); assertFalse(stillAway.focused());
+            var stillAway = reports.poll(8, TimeUnit.SECONDS); assertNotNull(stillAway); assertFalse(stillAway.focused());
             assertEquals(left.episodeId(), stillAway.episodeId(), "Threshold confirmation belongs to the same episode");
-            fx(() -> { windows[2].close(); windows[0].requestFocus(); return null; });
+            fx(() -> { windows[2].close(); windows[0].setFullScreen(true); windows[0].requestFocus(); return null; });
             var back = reports.poll(3, TimeUnit.SECONDS); assertNotNull(back); assertTrue(back.focused()); assertEquals(left.episodeId(), back.episodeId());
             fx(() -> { monitor[0].stop(); windows[0].setIconified(true); return null; });
             fx(() -> null); assertTrue(reports.isEmpty());
         } finally {
             fx(() -> { monitor[0].close(); for (Stage window : windows) if (window != null) window.close(); return null; });
+        }
+    }
+
+    @Test void examEntersFullscreenAndRealWindowExitsReachTheServerOncePerEpisode() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver", "jakarta.persistence.jdbc.url", "jdbc:h2:mem:fullscreen_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "", "hibernate.hbm2ddl.auto", "create-drop",
+                "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gvscreen", "Giảng viên", "Matkhau123!");
+            var classes = new ClassService(factory::createEntityManager, teacher.id());
+            var subject = new QuestionBankService(factory::createEntityManager, teacher.id()).createSubject("LTM");
+            var group = classes.create("A", "Lớp A", "HK1", subject.id());
+            classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,ST001,An,12/05/2003,C1"));
+            var exams = new ExamService(factory::createEntityManager, teacher.id());
+            var template = exams.createExam(new ExamDraft("Đề", 20, List.of(new ExamDraft.QuestionDraft(
+                    "Giao thức tin cậy?", QuestionType.MULTIPLE_CHOICE, "TCP", "UDP", "IP", "ICMP", "A"))));
+            var round = exams.activateExam(template.id(), group.id());
+            var server = new ExamServer(new SessionRegistry(), new AuthService(factory::createEntityManager, teacher.id()), exams);
+            server.start(0); var client = new ClientApp(); Stage[] external = new Stage[1];
+            Stage student = fx(() -> {
+                var stage = new Stage(); client.start(stage);
+                ((TextField) stage.getScene().lookup("#login-port")).setText(Integer.toString(server.getPort()));
+                ((TextField) stage.getScene().lookup("#login-code")).setText("ST001");
+                ((DatePicker) stage.getScene().lookup("#login-birth-date")).setValue(LocalDate.of(2003, 5, 12));
+                ((Button) stage.getScene().lookup("#login-connect")).fire(); return stage;
+            });
+            try {
+                awaitFx(() -> student.getScene().lookup("#join-exam") instanceof Button button && !button.isDisabled());
+                fx(() -> { assertFalse(student.isFullScreen()); ((Button) student.getScene().lookup("#join-exam")).fire(); return null; });
+                awaitFx(() -> student.getScene().lookup("#exam-submit") != null && student.isFullScreen() && student.isFocused());
+                // Esc / restoring down must be detected even though the exam retains keyboard focus.
+                fx(() -> { student.setFullScreen(false); return null; });
+                awaitFx(() -> student.getScene().lookup("#exam-window-warning").isVisible());
+                fx(() -> { ((Button) student.getScene().lookup("#exam-restore-fullscreen")).fire(); return null; });
+                awaitFx(() -> student.isFullScreen() && student.isFocused());
+                Thread.sleep(300);
+                assertEquals(0, exams.events().status(round.getId(), "ST001", "").count(), "A brief transition must not count");
+                Alert owned = fx(() -> {
+                    var dialog = new Alert(Alert.AlertType.CONFIRMATION, "Owned exam dialog"); dialog.initOwner(student); dialog.show(); return dialog;
+                });
+                Thread.sleep(5300);
+                assertEquals(0, exams.events().status(round.getId(), "ST001", "").count(), "An owned dialog is part of the exam");
+                fx(() -> { owned.close(); student.requestFocus(); return null; });
+                awaitFx(() -> student.isFullScreen() && student.isFocused());
+                for (int episode = 1; episode <= 3; episode++) {
+                    int expected = episode;
+                    fx(() -> {
+                        if (expected == 1) student.setFullScreen(false);
+                        else if (expected == 2) student.setIconified(true);
+                        else {
+                            external[0] = new Stage(); external[0].setScene(new Scene(new Label("Other application"), 300, 180));
+                            external[0].show(); external[0].requestFocus();
+                        }
+                        return null;
+                    });
+                    awaitFx(() -> exams.events().status(round.getId(), "ST001", "").count() == expected);
+                    assertTrue(exams.events().notices().getFirst().pending(), "Even the first episode must notify the teacher");
+                    Thread.sleep(300);
+                    assertEquals(expected, exams.events().status(round.getId(), "ST001", "").count(), "One continuous absence counts once");
+                    fx(() -> {
+                        if (external[0] != null) { external[0].close(); external[0] = null; }
+                        ((Button) student.getScene().lookup("#exam-restore-fullscreen")).fire(); return null;
+                    });
+                    awaitFx(() -> student.isFullScreen() && student.isFocused() && !student.getScene().lookup("#exam-window-warning").isVisible());
+                    awaitFx(() -> ((Label) student.getScene().lookup("#exam-warning-banner")).getText().contains(expected + ""));
+                }
+                assertEquals(1, exams.events().notices().stream().filter(n -> n.pending() && n.count() == 3).count());
+                fx(() -> { ((RadioButton) student.getScene().getRoot().lookupAll(".radio-button").iterator().next()).fire();
+                    ((Button) student.getScene().lookup("#exam-submit")).fire(); return null; });
+                awaitFx(() -> student.getScene().lookup("#exam-submit") == null && !student.isFullScreen());
+                fx(() -> { student.setIconified(true); return null; }); Thread.sleep(5300);
+                assertEquals(3, exams.events().status(round.getId(), "ST001", "").count(), "No monitoring after submission");
+            } finally {
+                fx(() -> { client.stop(); student.close(); if (external[0] != null) external[0].close(); return null; }); server.stop();
+            }
         }
     }
 

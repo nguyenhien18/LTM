@@ -43,7 +43,7 @@ final class ExamNotificationCenter {
         toast.setStyle("-fx-background-color: white; -fx-border-color: #999; -fx-border-width: 1;"); hide();
         StackPane.setAlignment(toast, Pos.TOP_RIGHT); StackPane.setMargin(toast, new Insets(65, 20, 0, 0));
         hideToast.setOnFinished(e -> hide());
-        polling.getKeyFrames().add(new KeyFrame(Duration.seconds(2), e -> refresh()));
+        polling.getKeyFrames().add(new KeyFrame(Duration.seconds(1), e -> refresh()));
         polling.setCycleCount(Timeline.INDEFINITE); polling.play(); refresh();
     }
     Button badge() { return badge; }
@@ -57,7 +57,8 @@ final class ExamNotificationCenter {
             notices = rows; long pending = rows.stream().filter(ExamEventService.Notice::pending).count();
             badge.setText("Thông báo · " + pending);
             badge.setStyle(pending > 0 ? "-fx-text-fill: #a63222; -fx-font-weight: bold;" : "");
-            var fresh = rows.stream().filter(ExamEventService.Notice::pending).filter(n -> announced.add(n.token())).toList();
+            var fresh = rows.stream().filter(ExamEventService.Notice::pending)
+                    .filter(n -> announced.add(n.token() + ":" + n.count())).toList();
             if (!fresh.isEmpty()) {
                 var first = fresh.getFirst();
                 toastText.setText(fresh.size() == 1 ? first.studentCode() + " — " + first.fullName() + "\n"

@@ -46,6 +46,7 @@ public class ClientHandler implements Runnable {
     private String focusEpisode;
     private Long focusExam;
     private Instant focusLeftAt;
+    private boolean focusConfirmed;
     private boolean focusMonitoring;
     private boolean examControls;
 
@@ -261,7 +262,7 @@ public class ClientHandler implements Runnable {
         if (studentCode == null) return;
         registry.updateExam(studentCode, this, session -> session.startExam(exam));
         send(JsonUtil.message(MessageType.EXAM_STARTED, exam));
-        focusEpisode = null; focusExam = null; focusLeftAt = null;
+        focusEpisode = null; focusExam = null; focusLeftAt = null; focusConfirmed = false;
         if (focusMonitoring) send(JsonUtil.message(MessageType.EXAM_WARNING_STATUS, examService.events().status(exam.getId(), studentCode, "")));
     }
 
@@ -274,14 +275,16 @@ public class ClientHandler implements Runnable {
         if (session == null || session.getStatus() != ClientStatus.DOING_EXAM
                 || !java.util.Objects.equals(session.getExamId(), report.examId())) return;
         if (!report.focused()) {
-            if (focusEpisode == null) { focusEpisode = report.episodeId(); focusExam = report.examId(); focusLeftAt = receivedAt; }
-            else if (report.episodeId().equals(focusEpisode) && report.examId().equals(focusExam)) {
+            if (focusEpisode == null) { focusEpisode = report.episodeId(); focusExam = report.examId(); focusLeftAt = receivedAt; focusConfirmed = false; }
+            else if (!focusConfirmed && report.episodeId().equals(focusEpisode) && report.examId().equals(focusExam)
+                    && java.time.Duration.between(focusLeftAt, receivedAt).toMillis() >= ExamFocusChange.AWAY_THRESHOLD_MILLIS) {
                 var status = examService.events().focusStillAway(report.examId(), studentCode, report.episodeId(), focusLeftAt, receivedAt);
+                focusConfirmed = true;
                 send(JsonUtil.message(MessageType.EXAM_WARNING_STATUS, status));
             }
         } else if (report.episodeId().equals(focusEpisode) && report.examId().equals(focusExam)) {
             Instant left = focusLeftAt;
-            focusEpisode = null; focusExam = null; focusLeftAt = null;
+            focusEpisode = null; focusExam = null; focusLeftAt = null; focusConfirmed = false;
             var status = examService.events().focusReturned(report.examId(), studentCode, report.episodeId(), left, receivedAt);
             send(JsonUtil.message(MessageType.EXAM_WARNING_STATUS, status));
         }

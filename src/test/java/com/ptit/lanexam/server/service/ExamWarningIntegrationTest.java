@@ -48,18 +48,19 @@ class ExamWarningIntegrationTest {
         ping(peer); assertTrue(exams.events().list(round.getId(), "ST001").isEmpty(), "Waiting-room signals must not count");
         peer.client.send(JsonUtil.message(MessageType.JOIN_EXAM, new JoinExamRequest(round.getId())));
         await(peer, MessageType.EXAM_STARTED); await(peer, MessageType.EXAM_WARNING_STATUS);
-        assertEquals(0, episode(peer, round.getId(), 2999, false).count());
-        assertEquals(1, episode(peer, round.getId(), 3000, true).count());
-        var second = episode(peer, round.getId(), 5000, false); assertEquals(2, second.count()); assertFalse(second.needsReview());
+        assertEquals(0, episode(peer, round.getId(), 4999, false).count());
+        var first = episode(peer, round.getId(), 5000, true); assertEquals(1, first.count()); assertTrue(first.needsReview());
+        assertTrue(exams.events().notices().getFirst().pending(), "The very first five-second episode must notify the teacher");
+        var second = episode(peer, round.getId(), 5000, false); assertEquals(2, second.count()); assertTrue(second.needsReview());
         var third = episode(peer, round.getId(), 7000, false); assertEquals(3, third.count()); assertTrue(third.needsReview());
         var firstNotice = exams.events().notices().getFirst(); assertTrue(firstNotice.pending());
         peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, new ExamFocusChange(round.getId() + 10000, UUID.randomUUID().toString(), false)));
         ping(peer);
         assertEquals(3, exams.events().status(round.getId(), "ST001", "").count());
         exams.events().review(round.getId(), "ST001"); assertFalse(exams.events().status(round.getId(), "ST001", "").needsReview());
-        assertFalse(episode(peer, round.getId(), 4000, false).needsReview());
-        assertFalse(episode(peer, round.getId(), 4000, false).needsReview());
-        assertTrue(episode(peer, round.getId(), 4000, false).needsReview());
+        assertTrue(episode(peer, round.getId(), 5000, false).needsReview());
+        assertTrue(episode(peer, round.getId(), 5000, false).needsReview());
+        assertTrue(episode(peer, round.getId(), 5000, false).needsReview());
         assertEquals(1, exams.events().notices().size());
         assertNotEquals(firstNotice.token(), exams.events().notices().getFirst().token());
         server.remindExam(round.getId(), "ST001", "Tập trung làm bài");
@@ -72,11 +73,35 @@ class ExamWarningIntegrationTest {
         peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, new ExamFocusChange(round.getId(), UUID.randomUUID().toString(), false)));
         ping(peer); assertEquals(6, exams.events().status(round.getId(), "ST001", "").count());
     }
+    @Test void earlyConfirmationIsRetriedAndReportsTheFirstEpisodeWithoutDuplicateEvents() throws Exception {
+        var round = server.openExam(templateId, classId).exam(); var peer = login();
+        peer.client.send(JsonUtil.message(MessageType.JOIN_EXAM, new JoinExamRequest(round.getId())));
+        await(peer, MessageType.EXAM_STARTED); await(peer, MessageType.EXAM_WARNING_STATUS);
+        String key = UUID.randomUUID().toString(); var away = new ExamFocusChange(round.getId(), key, false);
+        peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, away)); ping(peer);
+        clock.now = clock.now.plusMillis(4999);
+        peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, away)); ping(peer);
+        assertEquals(0, exams.events().status(round.getId(), "ST001", "").count());
+        clock.now = clock.now.plusMillis(1);
+        peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, away));
+        var status = JsonUtil.payload(await(peer, MessageType.EXAM_WARNING_STATUS), ExamWarningStatus.class);
+        assertEquals(1, status.count()); assertTrue(status.needsReview());
+        assertTrue(exams.events().notices().getFirst().pending());
+        for (int i = 0; i < 4; i++) {
+            clock.now = clock.now.plusSeconds(1);
+            peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, away)); ping(peer);
+        }
+        assertEquals(1, exams.events().status(round.getId(), "ST001", "").count());
+        peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, new ExamFocusChange(round.getId(), key, true)));
+        assertEquals(1, JsonUtil.payload(await(peer, MessageType.EXAM_WARNING_STATUS), ExamWarningStatus.class).count());
+        assertTrue(exams.events().list(round.getId(), "ST001").getFirst().detail().contains("9 giây"));
+    }
+
     @Test void historySurvivesReconnectRestartAndReviewIsScopedToTeacherAndRound() throws Exception {
         var round = server.openExam(templateId, classId).exam(); var peer = login();
         peer.client.send(JsonUtil.message(MessageType.JOIN_EXAM, new JoinExamRequest(round.getId())));
         await(peer, MessageType.EXAM_STARTED); await(peer, MessageType.EXAM_WARNING_STATUS);
-        episode(peer, round.getId(), 4000, false);
+        episode(peer, round.getId(), 5000, false);
         peer.client.close();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         while (exams.events().list(round.getId(), "ST001").stream().noneMatch(e -> e.kind() == Kind.DISCONNECTED) && System.nanoTime() < deadline) Thread.sleep(20);
@@ -99,18 +124,18 @@ class ExamWarningIntegrationTest {
     @Test void notificationQueueIsGroupedAndPersistsItsReviewBaselineAcrossServices() throws Exception {
         var round = server.openExam(templateId, classId).exam(); exams.startAttempt("ST001", round.getId()); exams.startAttempt("ST002", round.getId());
         for (String code : List.of("ST001", "ST002")) for (int i = 0; i < 3; i++)
-            exams.events().focusReturned(round.getId(), code, UUID.randomUUID().toString(), clock.instant().minusSeconds(4), clock.instant());
+            exams.events().focusReturned(round.getId(), code, UUID.randomUUID().toString(), clock.instant().minusSeconds(5), clock.instant());
         var queue = exams.events().notices(); assertEquals(2, queue.size()); assertTrue(queue.stream().allMatch(ExamEventService.Notice::pending));
         String token = queue.stream().filter(n -> n.studentCode().equals("ST001")).findFirst().orElseThrow().token();
-        for (int i = 0; i < 2; i++) exams.events().focusReturned(round.getId(), "ST001", UUID.randomUUID().toString(), clock.instant().minusSeconds(4), clock.instant());
+        for (int i = 0; i < 2; i++) exams.events().focusReturned(round.getId(), "ST001", UUID.randomUUID().toString(), clock.instant().minusSeconds(5), clock.instant());
         assertEquals(token, exams.events().notices().stream().filter(n -> n.studentCode().equals("ST001")).findFirst().orElseThrow().token(), "More events update the same pending notice");
         exams.events().list(round.getId(), "ST001"); assertTrue(exams.events().notices().stream().allMatch(ExamEventService.Notice::pending), "Viewing is not handling");
         exams.events().review(round.getId(), "ST001");
         var reloaded = new ExamEventService(factory::createEntityManager, teacherId, clock);
         for (int i = 1; i <= 3; i++) {
-            reloaded.focusReturned(round.getId(), "ST001", UUID.randomUUID().toString(), clock.instant().minusSeconds(4), clock.instant());
+            reloaded.focusReturned(round.getId(), "ST001", UUID.randomUUID().toString(), clock.instant().minusSeconds(5), clock.instant());
             var notice = reloaded.notices().stream().filter(n -> n.studentCode().equals("ST001")).findFirst().orElseThrow();
-            assertEquals(i == 3, notice.pending()); assertEquals(5 + i, notice.count());
+            assertTrue(notice.pending()); assertEquals(5 + i, notice.count());
         }
         var other = new TeacherAccountService(factory::createEntityManager).create("foreign", "Other", "Matkhau123!");
         assertTrue(new ExamEventService(factory::createEntityManager, other.id(), clock).notices().isEmpty());

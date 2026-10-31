@@ -16,5 +16,5 @@ if /I "%~1"=="--check" (
     call "%LAN_MAVEN%" -version
     exit /b
 )
-call "%LAN_MAVEN%" javafx:run -Pclient
+call "%LAN_MAVEN%" compile javafx:run -Pclient
 pause

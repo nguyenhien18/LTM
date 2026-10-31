@@ -1,6 +1,7 @@
 package com.ptit.lanexam.server.service;
 
 import com.ptit.lanexam.common.dto.ExamWarningStatus;
+import com.ptit.lanexam.common.dto.ExamFocusChange;
 import com.ptit.lanexam.server.entity.*;
 import com.ptit.lanexam.server.entity.ExamEvent.Kind;
 import jakarta.persistence.*;
@@ -19,7 +20,7 @@ public class ExamEventService {
     public record Entry(Long id, Instant at, Kind kind, String detail, boolean reviewed) {}
     public record Notice(Long roundId, String studentCode, String fullName, String classLabel, String roundLabel,
                          long count, long unreviewed, Instant updatedAt, Long firstUnreviewedId) {
-        public boolean pending() { return unreviewed >= 3; }
+        public boolean pending() { return unreviewed > 0; }
         public String token() { return roundId + ":" + studentCode + ":" + firstUnreviewedId; }
         public String state() { return pending() ? "Chưa xử lý" : "Đã xử lý"; }
     }
@@ -46,7 +47,7 @@ public class ExamEventService {
     private ExamWarningStatus focusObserved(Long roundId, String code, String episodeId, Instant left, Instant returned, boolean complete) {
         UUID.fromString(episodeId);
         long millis = Duration.between(left, returned).toMillis();
-        if (millis < 3000) return status(roundId, code, "");
+        if (millis < ExamFocusChange.AWAY_THRESHOLD_MILLIS) return status(roundId, code, "");
         boolean[] inserted = {false};
         write(em -> {
             Exam round = round(em, roundId);
@@ -115,7 +116,7 @@ public class ExamEventService {
             for (var event : events) groups.computeIfAbsent(new Key(event.getExam().getId(), event.getStudent().getStudentCode()), ignored -> new ArrayList<>()).add(event);
             List<Notice> notices = new ArrayList<>();
             for (var entry : groups.entrySet()) {
-                var rows = entry.getValue(); if (rows.size() < 3) continue;
+                var rows = entry.getValue();
                 var first = rows.getFirst(); var round = first.getExam();
                 var unreviewed = rows.stream().filter(e -> e.getReviewedAt() == null).toList();
                 notices.add(new Notice(round.getId(), first.getStudent().getStudentCode(), first.getStudent().getFullName(),
@@ -149,7 +150,7 @@ public class ExamEventService {
                 if (e.getKind() == Kind.DISCONNECTED) counts[2]++;
             }
             Map<String, Summary> result = new HashMap<>();
-            grouped.forEach((code, counts) -> result.put(code, new Summary(counts[0], counts[1] >= 3, counts[2])));
+            grouped.forEach((code, counts) -> result.put(code, new Summary(counts[0], counts[1] > 0, counts[2])));
             return Map.copyOf(result);
         }
     }

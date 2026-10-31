@@ -76,13 +76,18 @@ public class ClientApp extends Application {
     private Alert submitConfirmation;
     private ExamFocusMonitor focusMonitor;
     private Label warningBanner;
+    private HBox examWindowWarning;
     private boolean disqualificationPending;
     private record StudentResult(String title, String score, java.time.LocalDateTime submittedAt, String detail) {}
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
-        focusMonitor = new ExamFocusMonitor(stage, this::sendFocusChange);
+        focusMonitor = new ExamFocusMonitor(stage, this::sendFocusChange, away -> {
+            if (examWindowWarning != null) {
+                examWindowWarning.setVisible(away); examWindowWarning.setManaged(away);
+            }
+        });
         client.setMessageListener(this::onMessage);
         client.setDisconnectListener(message -> {
             int version = connectionVersion;
@@ -109,6 +114,7 @@ public class ClientApp extends Application {
     private void showLoginScene() {
         disqualificationPending = false;
         if (focusMonitor != null) focusMonitor.stop();
+        stage.setFullScreen(false);
         dashboardVisible = false;
         dashboardScene = null;
         assessmentCards = null;
@@ -259,7 +265,7 @@ public class ClientApp extends Application {
                         var warning = JsonUtil.payload(message, ExamWarningStatus.class);
                         if (currentExam != null && currentExam.getId().equals(warning.examId()) && warningBanner != null) {
                             warningBanner.setText(warning.message() == null || warning.message().isBlank()
-                                    ? "Cảnh báo rời cửa sổ: " + warning.count() + " lần"
+                                    ? "Cảnh báo rời màn hình thi: " + warning.count() + " lần"
                                     : warning.message());
                             warningBanner.setVisible(warning.count() > 0); warningBanner.setManaged(warning.count() > 0);
                         }
@@ -277,7 +283,7 @@ public class ClientApp extends Application {
                         if (currentExam != null && submitButton != null) {
                             submitButton.setDisable(false);
                             submitButton.setText("Nộp bài thi");
-                            focusMonitor.start(currentExam.getId());
+                            enterExamScreen(); focusMonitor.start(currentExam.getId());
                         }
                         joinPending = false;
                         refreshDashboard();
@@ -534,8 +540,15 @@ public class ClientApp extends Application {
         warningBanner = new Label(); warningBanner.setId("exam-warning-banner"); warningBanner.setWrapText(true);
         warningBanner.setStyle("-fx-text-fill: #9a5b00; -fx-padding: 8 16;");
         warningBanner.setVisible(false); warningBanner.setManaged(false);
-        root.setBottom(new VBox(warningBanner, bottom));
+        Button restoreScreen = new Button("Trở lại toàn màn hình");
+        restoreScreen.setId("exam-restore-fullscreen"); restoreScreen.setOnAction(e -> enterExamScreen());
+        Label screenMessage = new Label("Rời màn hình thi từ 5 giây sẽ báo ngay cho giảng viên."); screenMessage.setWrapText(true);
+        examWindowWarning = AppUi.toolbar(screenMessage, AppUi.spacer(), restoreScreen);
+        examWindowWarning.setId("exam-window-warning");
+        examWindowWarning.setVisible(false); examWindowWarning.setManaged(false);
+        root.setBottom(new VBox(examWindowWarning, warningBanner, bottom));
         stage.setScene(AppUi.desktopScene(root, 1000, 760));
+        enterExamScreen();
         focusMonitor.start(exam.getId());
 
         if (timer != null) timer.stop();
@@ -549,6 +562,13 @@ public class ClientApp extends Application {
         }));
         timer.setCycleCount(Timeline.INDEFINITE);
         timer.play();
+    }
+
+    private void enterExamScreen() {
+        stage.setIconified(false);
+        stage.setFullScreenExitHint("Esc: thoát toàn màn hình. Rời màn hình thi từ 5 giây sẽ báo ngay cho giảng viên.");
+        stage.setFullScreen(true);
+        stage.requestFocus();
     }
 
     private void submitCurrentExam(boolean automatic) {
@@ -587,6 +607,7 @@ public class ClientApp extends Application {
                     if (version != connectionVersion) return;
                     submitButton.setDisable(false);
                     submitButton.setText("Nộp bài thi");
+                    enterExamScreen(); focusMonitor.start(currentExam.getId());
                     showAlert(Alert.AlertType.ERROR, "Không gửi được bài", ex.getMessage());
                 });
             }
@@ -615,6 +636,7 @@ public class ClientApp extends Application {
 
     private void showResult(SubmitResult result) {
         focusMonitor.stop();
+        stage.setFullScreen(false);
         if (submitConfirmation != null) submitConfirmation.close();
         dashboardVisible = false;
         if (dashboardTimer != null) dashboardTimer.stop();
