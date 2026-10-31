@@ -11,3 +11,12 @@ dist/
 *.log
 .DS_Store
 ~$*
+
+# Giu thu muc report tren GitHub, chua cong khai noi dung bao cao.
+/report/*
+!/report/README.md
+/tools/build_final_report.py
+/tools/report_assets.py
+/tools/verify_final_report.py
+__pycache__/
+*.py[cod]

@@ -31,7 +31,36 @@ Trong **Lớp & sinh viên**, gõ tên hoặc MSV vào ô tìm kiếm để lọ
 - Các máy kết nối được IP/cổng Server trong LAN; cho phép Java nhận TCP cổng **5000** qua firewall.
 - Lần build đầu cần tải thư viện Maven. Sau khi có đủ thư viện/runtime, lúc thi không cần Internet.
 
-Repository chỉ chứa mã nguồn, kiểm thử, tài nguyên cần cho ứng dụng và cấu hình chạy. Báo cáo riêng, thư mục đóng gói, EXE/ZIP và dữ liệu build không được đưa vào repository.
+Repository gồm mã nguồn, kiểm thử, cấu hình chạy và tài liệu phục vụ bộ nộp. Thư mục `report/` được giữ theo cấu trúc bài tập lớn; nội dung báo cáo chưa đưa lên GitHub. `statics/` chứa sơ đồ, dữ liệu demo và bằng chứng kiểm thử. EXE/ZIP, thư mục đóng gói và dữ liệu build được giữ ngoài repository.
+
+## Cấu trúc và tài liệu nộp bài
+
+```text
+LAN_Exam_System/
+├── README.md                   # Cài đặt, cấu hình, chạy và giới hạn
+├── INSTRUCTION.md              # Hướng dẫn gốc do giảng viên cung cấp
+├── TOPICS.md                   # Đề tài nhóm lựa chọn và phạm vi
+├── pom.xml                     # Java 21, JavaFX và các dependency Maven
+├── run-server.bat / run-client.bat / start-mysql.bat
+├── report/
+│   └── README.md               # Giữ vị trí báo cáo; bổ sung bản nộp sau
+├── statics/
+│   ├── architecture.png / architecture.svg
+│   ├── protocol.png / protocol.svg
+│   ├── PROTOCOL.md             # Định dạng và luồng message hiện hành
+│   ├── results/                # Log thật, tổng hợp và kế hoạch thực nghiệm
+│   └── dataset/                # Hai CSV 60 sinh viên, Word mẫu và ngân hàng demo
+├── tools/                      # Xuất sơ đồ và kiểm tra tài nguyên bộ nộp
+└── src/
+    ├── main/java/com/ptit/lanexam/
+    │   ├── client/             # JavaFX và TCP phía sinh viên
+    │   ├── common/             # Protocol, DTO và giao diện dùng chung
+    │   └── server/             # UI, network, service, entity và persistence
+    ├── main/resources/         # Cấu hình JPA, CSS và Word mẫu
+    └── test/                   # Kiểm thử và fixtures
+```
+
+Giữ bố cục Maven để các lệnh hiện tại tiếp tục chạy được. Hướng dẫn chi tiết: [đề tài](TOPICS.md), [protocol](statics/PROTOCOL.md), [dữ liệu demo](statics/dataset/README.md), [kết quả đã ghi nhận](statics/results/README.md), [báo cáo](report/README.md). Bộ nộp Google Drive cần báo cáo cuối và mã nguồn đầy đủ; hướng dẫn này không đồng nghĩa đã nộp hoặc đã được duyệt đề tài.
 
 ## Chạy Server
 
@@ -76,7 +105,7 @@ Mở terminal khác trên cùng máy hoặc tải mã nguồn về máy sinh vi�
 Hoặc:
 
 ```powershell
-mvn javafx:run -Pclient
+mvn compile javafx:run -Pclient
 ```
 
 Nhập IP của máy giảng viên, cổng 5000, MSV và ngày sinh đúng danh sách CSV. `127.0.0.1` chỉ dùng khi Client và Server chạy cùng máy. Client không cần MySQL hoặc các biến `DB_*`.
@@ -166,6 +195,12 @@ Mỗi tiêu đề MỨC 1–6 áp dụng cho các câu phía dưới. Nội dung
 
 ## Kiến trúc và giao thức
 
+![Kiến trúc hệ thống](statics/architecture.png)
+
+![Luồng giao tiếp thi trắc nghiệm](statics/protocol.png)
+
+Xem [thiết kế giao thức chi tiết](statics/PROTOCOL.md). Bản SVG đi kèm có thể dùng để phóng to và cập nhật hình cho báo cáo.
+
 ```text
 Client JavaFX ── TCP / JSON Lines ── Server JavaFX ── Hibernate/JPA ── MySQL
 ```
@@ -198,6 +233,40 @@ Test dùng H2 riêng, TCP cổng tạm và JavaFX, không cần MySQL thật. `E
 
 Có test 80 socket cùng tồn tại trên loopback; kết quả đó không thay thế thử nghiệm nhiều máy thật trong phòng lab. Cần kiểm tra IP/firewall/mất mạng và MySQL trên môi trường demo.
 
+## Kết quả thực nghiệm và bằng chứng hiện có
+
+Log ngày 31/10/2026 ghi nhận **141 kiểm thử, 0 thất bại, 0 lỗi, 0 bỏ qua**, thời gian toàn bộ lệnh Maven **1 phút 34 giây**. Đây là kết quả kiểm thử chức năng/tích hợp/giao diện; thời gian chạy bộ test không phải độ trễ phản hồi hệ thống. Log gốc được giữ tại [statics/results/full-tests-2026-10-31.txt](statics/results/full-tests-2026-10-31.txt).
+
+Có thêm `ReportBenchmarkTest` để đo TCP loopback/H2 ở các mức 1/10/20/40/80 Client, 3 lượt mỗi mức, 30 câu, 5 update mỗi Client. Test này chỉ chạy khi bật riêng:
+
+```powershell
+mvn "-Dlanexam.build.directory=output/benchmark-build" "-Dtest=ReportBenchmarkTest" "-Dlanexam.benchmark=true" test
+python tools/analyze_report_benchmark.py
+```
+
+Mẫu đo thô, cấu hình JVM và thống kê được tạo trong `output/report-final/experiment/`; đây là đầu ra cục bộ, không đưa lên GitHub. Công cụ tổng hợp cần Python và Pillow. Phép đo dùng Client/Server cùng JVM và H2 in-memory, chưa đại diện MySQL qua LAN nhiều máy. [Kế hoạch thực nghiệm](statics/results/EXPERIMENT_PLAN.md) định nghĩa các phép đo mở rộng. Kiểm tra tài nguyên bộ nộp bằng `powershell -NoProfile -ExecutionPolicy Bypass -File tools/Test-Submission.ps1`.
+
+## Novelty / Contributions
+
+Các đóng góp dưới đây được hiểu là cải tiến so với hệ thống thi cơ bản chỉ phát đề và nhận bài. Chưa có benchmark đối chiếu định lượng hoặc tuyên bố thuật toán mới trong nghiên cứu.
+
+| Đóng góp kỹ thuật | Triển khai | Bằng chứng chức năng |
+|---|---|---|
+| Khôi phục ca thi và giữ nguyên danh sách/mã đề/deadline | `ExamService`, `ExamServer`, dữ liệu lượt thi | `ServerLifecycleIntegrationTest`, `ExamWorkflowUiTest` |
+| Chốt bài theo thời điểm Server nhận đủ request, chờ đáp án đã nhận trước hạn | `RequestReceipt`, FIFO và giao dịch bài nộp | `ExamServiceIntegrationTest`, `ExamEarlyEndIntegrationTest` |
+| Sinh mã đề giữ cơ cấu độ khó, đảo trong cùng mức | `ExamVariants` và bản sao câu hỏi | `ExamVariantIntegrationTest` |
+| Báo rời màn hình từ 5 giây, gửi lại cùng episode ID và chống ghi trùng | `ExamFocusMonitor`, `ClientHandler`, `ExamEventService` | `ExamWarningIntegrationTest`, `ExamWorkflowUiTest` |
+
 ## Giới hạn
 
 Xác thực sinh viên bằng ngày sinh còn yếu và TCP chưa TLS; phù hợp BTL/demo trên LAN tin cậy. Theo dõi focus chỉ nhận tín hiệu từ Client, không quay/chụp màn hình, không phát hiện điện thoại và không bảo đảm chống Client bị chỉnh sửa. Chưa có thi ngoại tuyến, tự reconnect, ACK riêng từng lần lưu hoặc gia hạn cá nhân. Khóa sinh viên áp dụng cho mọi lớp của giảng viên đặt khóa, cần giảng viên đó mở khóa để đăng nhập lại.
+
+## Tài liệu tham khảo kỹ thuật
+
+- [Java 21 API](https://docs.oracle.com/en/java/javase/21/docs/api/): Socket, ServerSocket và concurrency.
+- [OpenJFX 21 API](https://openjfx.io/javadoc/21/): Stage, điều khiển và cơ chế sự kiện giao diện.
+- [Hibernate ORM 6.6 User Guide](https://docs.jboss.org/hibernate/orm/6.6/userguide/html_single/Hibernate_User_Guide.html): JPA, giao dịch và persistence.
+- [MySQL 8.0 Reference Manual](https://dev.mysql.com/doc/refman/8.0/en/): cấu hình và quản lý database.
+- [Jackson Databind](https://github.com/FasterXML/jackson-databind): ánh xạ message JSON.
+
+Danh mục trên định vị tài liệu của các công nghệ đang dùng; khi viết báo cáo, nhóm cần trích dẫn đúng nội dung đã tham khảo trong từng phần và bổ sung nguồn related work đã thực sự đọc.

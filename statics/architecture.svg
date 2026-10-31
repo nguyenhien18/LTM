@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="900" viewBox="0 0 1500 900">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto-start-reverse"><path d="M0,0 L0,6 L9,3 Z" fill="#42576b"/></marker>
+    <style>text{font-family:'Segoe UI',Arial,sans-serif;fill:#223344} .title{font-size:30px;font-weight:700}.heading{font-size:23px;font-weight:600}.body{font-size:20px}.small{font-size:18px;fill:#526270}.box{fill:white;stroke:#8d9ba7;stroke-width:2;rx:12}.flow{fill:none;stroke:#42576b;stroke-width:2.5;marker-end:url(#arrow)}.two{marker-start:url(#arrow)}</style>
+  </defs>
+  <rect width="1500" height="900" fill="#f6f8fa"/>
+  <text x="35" y="45" class="title">LAN Exam System — Kiến trúc hiện hành</text>
+  <rect x="310" y="75" width="880" height="685" rx="16" fill="#edf2f6" stroke="#8d9ba7" stroke-width="2"/>
+  <text x="335" y="105" class="small">SERVER GIẢNG VIÊN · JAVA 21</text>
+  <rect x="340" y="125" width="810" height="80" class="box"/>
+  <text x="365" y="158" class="heading">ServerApp / JavaFX</text>
+  <text x="365" y="187" class="body">Lớp, ngân hàng, tổ chức ca, kết quả, thông báo và xử lý vi phạm</text>
+  <rect x="30" y="245" width="235" height="210" class="box"/>
+  <text x="50" y="282" class="heading">Nhiều Client</text>
+  <text x="50" y="320" class="body">ClientApp / JavaFX</text>
+  <text x="50" y="353" class="body">LanClient / TCP</text>
+  <text x="50" y="391" class="small">Đăng nhập, làm bài,</text>
+  <text x="50" y="419" class="small">lưu/nộp và cảnh báo</text>
+  <rect x="340" y="250" width="350" height="245" class="box"/>
+  <text x="360" y="286" class="heading">Network layer</text>
+  <text x="360" y="324" class="body">ExamServer / accept</text>
+  <text x="360" y="359" class="body">ClientHandler / virtual thread</text>
+  <text x="360" y="394" class="body">FIFO riêng mỗi kết nối</text>
+  <text x="360" y="429" class="body">Tối đa 16 request xử lý</text>
+  <text x="360" y="464" class="body">ClientWriter / outbox, timeout</text>
+  <rect x="750" y="250" width="400" height="245" class="box"/>
+  <text x="775" y="286" class="heading">Service / nghiệp vụ</text>
+  <text x="775" y="324" class="body">Auth, TeacherScope, ClassService</text>
+  <text x="775" y="359" class="body">Ngân hàng, ExamService, chia ca</text>
+  <text x="775" y="394" class="body">ExamVariants / snapshot đề</text>
+  <text x="775" y="429" class="body">Deadline, RequestReceipt, chấm</text>
+  <text x="775" y="464" class="body">ExamEventService / nhật ký</text>
+  <rect x="340" y="555" width="350" height="150" class="box"/>
+  <text x="360" y="590" class="heading">Trạng thái và tác vụ nền</text>
+  <text x="360" y="629" class="body">SessionRegistry / phiên hiện tại</text>
+  <text x="360" y="665" class="body">Expiry worker / chấm hết giờ</text>
+  <rect x="750" y="555" width="400" height="150" class="box"/>
+  <text x="775" y="591" class="heading">Persistence</text>
+  <text x="775" y="630" class="body">Entity / Hibernate JPA</text>
+  <text x="775" y="665" class="body">Giao dịch và khóa bản ghi</text>
+  <rect x="1230" y="555" width="235" height="150" class="box"/>
+  <text x="1250" y="592" class="heading">MySQL</text>
+  <text x="1250" y="630" class="body">Dữ liệu phía Server</text>
+  <text x="1250" y="665" class="small">Roster, bài, mã, log</text>
+  <path d="M265,350 H340" class="flow two"/>
+  <text x="35" y="500" class="small">TCP / JSON Lines UTF-8</text>
+  <text x="35" y="530" class="small">Client không truy cập DB</text>
+  <path d="M690,370 H750" class="flow two"/>
+  <path d="M950,205 V250" class="flow"/>
+  <path d="M950,495 V555" class="flow two"/>
+  <path d="M1150,630 H1230" class="flow two"/>
+  <path d="M515,495 V555" class="flow two"/>
+  <path d="M690,635 H720 V475 H750" class="flow"/>
+  <rect x="30" y="795" width="1435" height="75" rx="12" fill="#e5ebf0"/>
+  <text x="50" y="825" class="body">Phạm vi: một giảng viên và một ca đang diễn ra trên mỗi Server; nhiều Client cùng kết nối.</text>
+  <text x="50" y="853" class="small">CSDL giữ danh sách ca, deadline, mã đề, đáp án và kết quả để tiếp tục lượt còn hạn sau sự cố.</text>
+</svg>

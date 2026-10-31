@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1350" viewBox="0 0 1500 1350">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 Z" fill="#42576b"/></marker>
+    <style>text{font-family:'Segoe UI',Arial,sans-serif;fill:#223344}.title{font-size:30px;font-weight:700}.heading{font-size:23px;font-weight:600}.body{font-size:20px}.small{font-size:18px;fill:#526270}.line{stroke:#42576b;stroke-width:2;marker-end:url(#arrow)}.life{stroke:#a2aeb8;stroke-width:2;stroke-dasharray:7 6}</style>
+  </defs>
+  <rect width="1500" height="1350" fill="#f6f8fa"/>
+  <text x="35" y="46" class="title">LAN Exam System — Luồng TCP và lưu trạng thái</text>
+  <rect x="75" y="83" width="300" height="65" rx="10" fill="#e0e8ef"/>
+  <rect x="575" y="83" width="300" height="65" rx="10" fill="#e0e8ef"/>
+  <rect x="1100" y="83" width="300" height="65" rx="10" fill="#e0e8ef"/>
+  <text x="225" y="124" class="heading" text-anchor="middle">Client sinh viên</text>
+  <text x="725" y="124" class="heading" text-anchor="middle">Server / Service</text>
+  <text x="1250" y="124" class="heading" text-anchor="middle">MySQL</text>
+  <path d="M225,148 V1220 M725,148 V1220 M1250,148 V1220" class="life"/>
+  <path d="M225,215 H725" class="line"/><text x="250" y="202" class="body">TCP connect: IP Server / cổng 5000</text>
+  <path d="M225,275 H725" class="line"/><text x="250" y="262" class="body">LOGIN (MSV, ngày sinh, khả năng Client)</text>
+  <path d="M725,335 H1250" class="line"/><text x="750" y="322" class="body">Kiểm tra danh tính, lớp và khóa theo giảng viên</text>
+  <path d="M725,395 H225" class="line"/><text x="250" y="382" class="body">LOGIN_RESULT</text>
+  <path d="M725,455 H225" class="line"/><text x="250" y="442" class="body">EXAM_AVAILABLE (offer đúng quyền hoặc null)</text>
+  <path d="M225,515 H725" class="line"/><text x="250" y="502" class="body">JOIN_EXAM (examId)</text>
+  <path d="M725,575 H1250" class="line"/><text x="750" y="562" class="body">Kiểm tra roster, hạn, tạo/đọc lượt và mã đã gán</text>
+  <path d="M725,635 H225" class="line"/><text x="250" y="622" class="body">EXAM_STARTED (đề, deadline, savedAnswers)</text>
+  <path d="M225,695 H725" class="line"/><text x="250" y="682" class="body">ANSWER_UPDATE (examId, snapshot answers)</text>
+  <path d="M725,755 H1250" class="line"/><text x="750" y="742" class="body">Lưu lựa chọn hợp lệ theo RequestReceipt</text>
+  <rect x="45" y="790" width="1370" height="155" rx="12" fill="#f1eee5" stroke="#b7a883"/>
+  <text x="65" y="819" class="small">TÙY CHỌN TRONG LÚC LÀM BÀI — rời toàn màn hình / thu nhỏ / chuyển ứng dụng</text>
+  <path d="M225,866 H725" class="line"/><text x="250" y="851" class="body">EXAM_FOCUS_CHANGED (cùng episodeId, gửi lại)</text>
+  <path d="M725,916 H225" class="line"/><text x="250" y="902" class="body">EXAM_WARNING_STATUS khi Server đo đủ 5 giây</text>
+  <text x="770" y="871" class="small">Một lần rời chỉ ghi một sự kiện.</text>
+  <text x="770" y="902" class="small">Nhật ký lưu DB; Server báo giảng viên.</text>
+  <path d="M225,1005 H725" class="line"/><text x="250" y="992" class="body">SUBMIT_EXAM (examId, answers)</text>
+  <path d="M725,1065 H1250" class="line"/><text x="750" y="1052" class="body">Chốt/chấm và lưu kết quả duy nhất</text>
+  <path d="M725,1125 H225" class="line"/><text x="250" y="1112" class="body">SUBMIT_RESULT (điểm, số đúng, thông báo)</text>
+  <text x="250" y="1173" class="small">Hết giờ/dừng ca: Server cũng chốt bài đã lưu của sinh viên offline.</text>
+  <rect x="45" y="1235" width="1370" height="90" rx="10" fill="#e5ebf0"/>
+  <text x="65" y="1268" class="body">Mỗi frame: một dòng JSON UTF-8 {type, payload}. Heartbeat: PING / PONG mỗi 5 giây.</text>
+  <text x="65" y="1300" class="small">ERROR theo lỗi; mất kết nối cần đăng nhập lại. Các mũi tên DB rút gọn, không biểu diễn mọi truy vấn/phản hồi.</text>
+</svg>
