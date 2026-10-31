@@ -87,6 +87,7 @@ final class ExamOrganizer extends BorderPane {
         ordinalColumn.setMinWidth(55); roster.getColumns().add(ordinalColumn);
         roster.getColumns().add(UiSupport.column("Mã sinh viên", 140, ClassService.RosterStudent::code));
         roster.getColumns().add(UiSupport.column("Họ và tên", 220, ClassService.RosterStudent::fullName));
+        roster.getColumns().add(UiSupport.column("Mã đề", 75, row -> progress == null ? "—" : progress.variantCode(row.code())));
         roster.getColumns().add(UiSupport.column("Lớp chính quy", 130, r -> r.regularClass() == null ? "" : r.regularClass()));
         roster.getColumns().add(UiSupport.column("Kết nối", 100, row -> session(row.code()) == null ? "Offline" : "Online"));
         roster.getColumns().add(UiSupport.column("Bài thi của ca này", 140,
@@ -165,8 +166,8 @@ final class ExamOrganizer extends BorderPane {
             if (checkingPreparation && !new java.util.HashSet<>(expected).equals(new java.util.HashSet<>(result.rows()))) {
                 invalidatePreparation(); status.setText("Danh sách thi đã thay đổi. Bấm Chuẩn bị ca thi để kiểm tra lại."); return;
             }
-            progress = result.progress().orElse(null);
-            warnings = result.warnings();
+            progress = checkingPreparation ? null : result.progress().orElse(null);
+            warnings = progress == null ? java.util.Map.of() : result.warnings();
             runningRound = progress == null ? null : progress.roundId();
             deadlineMillis = progress == null || !exams.currentTime().isBefore(progress.deadline())
                     ? 0 : progress.deadline().toEpochMilli();
@@ -205,7 +206,8 @@ final class ExamOrganizer extends BorderPane {
                     : selectedShift == null ? classes.roster(selected.id()) : shifts.roster(selected.id(), selectedShift.id()), savedProgress);
         }, data -> {
             if (disposed || request != version) return;
-            var rows = data.rows(); progress = data.progress().orElse(null);
+            var rows = data.rows();
+            progress = data.progress().filter(saved -> selectedShift != null || exams.currentTime().isBefore(saved.deadline())).orElse(null);
             runningRound = progress == null ? null : progress.roundId();
             deadlineMillis = progress == null || !exams.currentTime().isBefore(progress.deadline()) ? 0 : progress.deadline().toEpochMilli();
             boolean opened = selectedShift != null && selectedShift.roundId() != null

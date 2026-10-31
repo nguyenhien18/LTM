@@ -233,15 +233,36 @@ public class ExamServer {
         if (!running || session == null || !java.util.Objects.equals(roundId, session.getExamId())
                 || session.getStatus() != ClientStatus.DOING_EXAM)
             throw new IllegalStateException("Sinh viên không đang làm ca này hoặc đã offline.");
-        // Validate the teacher and round before sending anything to the Client.
-        examService.events().reminder(roundId, studentCode, reason);
+        if (reason == null || reason.isBlank() || reason.strip().length() > 1000)
+            throw new IllegalArgumentException("Nhắc nhở từ 1–1.000 ký tự.");
+        // Validate scope and the active attempt before sending; resolve only after the send is accepted.
+        if (!examService.canDisqualify(roundId, studentCode)) throw new IllegalStateException("Bài thi đã kết thúc.");
         if (!session.getHandler().warnViolation(reason.strip())) throw new IllegalStateException("Sinh viên vừa mất kết nối.");
+        examService.events().reminder(roundId, studentCode, reason);
     }
 
     public boolean isDoingExam(Long roundId, String code) {
         ClientSession session = registry.find(code);
         return running && session != null && session.getStatus() == ClientStatus.DOING_EXAM
                 && java.util.Objects.equals(roundId, session.getExamId());
+    }
+    public boolean canDisqualify(Long roundId, String code) { return running && examService.canDisqualify(roundId, code); }
+
+    public void disqualify(Long roundId, String code, String reason) {
+        boolean changed;
+        attemptGate.writeLock().lock();
+        try {
+            if (!running) throw new IllegalStateException("Server chưa chạy.");
+            changed = examService.disqualify(roundId, code, reason);
+        } finally { attemptGate.writeLock().unlock(); }
+        if (!changed) return;
+        ClientSession session = registry.find(code);
+        if (session != null && java.util.Objects.equals(roundId, session.getExamId()))
+            session.getHandler().notifyDisqualification(roundId, reason.strip());
+        examService.finalizeExpiredAttempts();
+        if (session != null && java.util.Objects.equals(roundId, session.getExamId())) {
+            session.getHandler().refreshExpiredAttempt(); session.getHandler().sendAvailability();
+        }
     }
 
     public void lockAccount(String studentCode, String reason) {

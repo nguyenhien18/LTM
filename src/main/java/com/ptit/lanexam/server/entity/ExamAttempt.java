@@ -27,6 +27,12 @@ public class ExamAttempt {
 
     @Column(name = "submitted_at")
     private Instant submittedAt;
+    @Column(name = "disqualification_reason", length = 1000)
+    private String disqualificationReason;
+    public String getDisqualificationReason() { return disqualificationReason; }
+    public void disqualify(Instant cutoff, String reason) {
+        deadlineAt = cutoff.truncatedTo(java.time.temporal.ChronoUnit.MILLIS); disqualificationReason = reason;
+    }
 
     @Column(name = "variant_code", length = 8)
     private String variantCode;

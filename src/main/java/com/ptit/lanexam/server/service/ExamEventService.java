@@ -17,6 +17,12 @@ public class ExamEventService {
         public String label() { return count + " lần" + (needsReview ? " · Cần kiểm tra" : ""); }
     }
     public record Entry(Long id, Instant at, Kind kind, String detail, boolean reviewed) {}
+    public record Notice(Long roundId, String studentCode, String fullName, String classLabel, String roundLabel,
+                         long count, long unreviewed, Instant updatedAt, Long firstUnreviewedId) {
+        public boolean pending() { return unreviewed >= 3; }
+        public String token() { return roundId + ":" + studentCode + ":" + firstUnreviewedId; }
+        public String state() { return pending() ? "Chưa xử lý" : "Đã xử lý"; }
+    }
     public ExamEventService(Supplier<EntityManager> managers, Long teacherId, Clock clock) {
         this.managers = managers; scope = new TeacherScope(teacherId); this.clock = clock;
     }
@@ -57,7 +63,7 @@ public class ExamEventService {
         });
         var state = status(roundId, code, "");
         if (!inserted[0]) return state;
-        String message = state.count() >= 3 ? "Bạn đã rời cửa sổ thi " + state.count() + " lần. Giảng viên sẽ kiểm tra nhật ký."
+        String message = state.needsReview() ? "Bạn đã rời cửa sổ thi " + state.count() + " lần. Giảng viên sẽ kiểm tra nhật ký."
                 : "Bạn vừa rời cửa sổ thi. Vui lòng tập trung làm bài. Lần " + state.count() + ".";
         return new ExamWarningStatus(roundId, state.count(), state.needsReview(), message);
     }
@@ -76,16 +82,50 @@ public class ExamEventService {
         write(em -> {
             Exam round = round(em, roundId); ExamAttempt attempt = attempt(em, roundId, code);
             em.persist(new ExamEvent(round, attempt.getStudent(), UUID.randomUUID().toString(), Kind.MANUAL_WARNING, clock.instant(), text.strip()));
+            markReviewed(em, roundId, code);
         });
     }
     public void review(Long roundId, String code) {
         write(em -> {
             Exam round = round(em, roundId); ExamAttempt attempt = attempt(em, roundId, code);
-            var events = entries(em, roundId, code);
-            if (events.stream().noneMatch(e -> e.getKind() == Kind.FOCUS_LOST && e.getReviewedAt() == null)) return;
-            events.stream().filter(e -> e.getKind() == Kind.FOCUS_LOST && e.getReviewedAt() == null).forEach(e -> e.review(clock.instant()));
+            if (!markReviewed(em, roundId, code)) return;
             em.persist(new ExamEvent(round, attempt.getStudent(), UUID.randomUUID().toString(), Kind.REVIEWED, clock.instant(), "Giảng viên đã kiểm tra các cảnh báo trước thời điểm này."));
         });
+    }
+    private boolean markReviewed(EntityManager em, Long roundId, String code) {
+        boolean changed = false;
+        for (var event : entries(em, roundId, code)) if (event.getKind() == Kind.FOCUS_LOST && event.getReviewedAt() == null) {
+            event.review(clock.instant()); changed = true;
+        }
+        return changed;
+    }
+    void recordDisqualification(EntityManager em, ExamAttempt attempt, String reason) {
+        markReviewed(em, attempt.getExam().getId(), attempt.getStudent().getStudentCode());
+        em.persist(new ExamEvent(attempt.getExam(), attempt.getStudent(), UUID.randomUUID().toString(), Kind.DISQUALIFIED, clock.instant(), reason));
+    }
+    /** One aggregate per student/round. Opening a journal is not a review action. */
+    public List<Notice> notices() {
+        try (var em = managers.get()) {
+            var events = em.createQuery("select e from ExamEvent e join fetch e.student join fetch e.exam x "
+                            + "left join fetch x.courseClass left join fetch x.shift where e.kind = :kind and "
+                            + scope.predicate("x") + " order by e.id", ExamEvent.class)
+                    .setParameter("kind", Kind.FOCUS_LOST).getResultList();
+            record Key(Long round, String code) {}
+            Map<Key, List<ExamEvent>> groups = new LinkedHashMap<>();
+            for (var event : events) groups.computeIfAbsent(new Key(event.getExam().getId(), event.getStudent().getStudentCode()), ignored -> new ArrayList<>()).add(event);
+            List<Notice> notices = new ArrayList<>();
+            for (var entry : groups.entrySet()) {
+                var rows = entry.getValue(); if (rows.size() < 3) continue;
+                var first = rows.getFirst(); var round = first.getExam();
+                var unreviewed = rows.stream().filter(e -> e.getReviewedAt() == null).toList();
+                notices.add(new Notice(round.getId(), first.getStudent().getStudentCode(), first.getStudent().getFullName(),
+                        round.getCourseClass() == null ? "Lượt thi cũ" : round.getCourseClass().displayName(),
+                        round.getShift() == null ? "Lượt #" + round.getId() : "Ca " + round.getShift().getNumber() + " · #" + round.getId(),
+                        rows.size(), unreviewed.size(), rows.getLast().getOccurredAt(), unreviewed.isEmpty() ? null : unreviewed.getFirst().getId()));
+            }
+            notices.sort(Comparator.comparing(Notice::pending).reversed().thenComparing(Notice::updatedAt, Comparator.reverseOrder()));
+            return List.copyOf(notices);
+        }
     }
     public List<Entry> list(Long roundId, String code) {
         try (var em = managers.get()) {
@@ -109,7 +149,7 @@ public class ExamEventService {
                 if (e.getKind() == Kind.DISCONNECTED) counts[2]++;
             }
             Map<String, Summary> result = new HashMap<>();
-            grouped.forEach((code, counts) -> result.put(code, new Summary(counts[0], counts[0] >= 3 && counts[1] > 0, counts[2])));
+            grouped.forEach((code, counts) -> result.put(code, new Summary(counts[0], counts[1] >= 3, counts[2])));
             return Map.copyOf(result);
         }
     }

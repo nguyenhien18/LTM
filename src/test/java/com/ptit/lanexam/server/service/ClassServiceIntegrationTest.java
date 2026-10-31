@@ -31,33 +31,29 @@ class ClassServiceIntegrationTest {
         classB = classes.create("LTM-B", "Nhóm B", "2026 HK1", subjectId).id();
     }
     @AfterEach void close() { factory.close(); }
-    @Test void editingSharedProfileChangesLoginAndAllClassesButPreservesIdentityAndOrdinals() {
+    @Test void differentCsvEnrollsExistingStudentWithoutChangingSharedProfileOrLogin() {
         var rows = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n7,SV001,Nguyễn An,12/05/2003,C1");
         classes.importRoster(classA, rows);
-        classes.importRoster(classB, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n19,SV001,Nguyễn An,12/05/2003,C1"));
-        var old = classes.roster(classA).getFirst();
-        var saved = classes.updateProfile(classA, old, "Nguyễn Văn An", LocalDate.of(2003, 5, 17), "C2");
-        assertEquals("SV001", saved.code()); assertEquals(7, saved.ordinal());
+        var imported = classes.importRoster(classB, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n19,SV001,Nguyễn Văn An,17/05/2003,C2"));
+        assertEquals(1, imported.profileDifferences()); assertEquals(1, imported.count(ClassService.ImportStatus.ENROLL));
+        assertEquals(7, classes.roster(classA).getFirst().ordinal());
         var second = classes.roster(classB).getFirst();
-        assertEquals("Nguyễn Văn An", second.fullName()); assertEquals("C2", second.regularClass()); assertEquals(19, second.ordinal());
+        assertEquals("Nguyễn An", second.fullName()); assertEquals("C1", second.regularClass()); assertEquals(19, second.ordinal());
         var auth = new AuthService(factory::createEntityManager, teacherId);
-        assertTrue(auth.authenticate("SV001", "2003-05-12").isEmpty());
-        assertTrue(auth.authenticate("SV001", "2003-05-17").isPresent());
+        assertTrue(auth.authenticate("SV001", "2003-05-12").isPresent());
+        assertTrue(auth.authenticate("SV001", "2003-05-17").isEmpty());
         try (var em = factory.createEntityManager()) { assertEquals(1L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult()); }
     }
-    @Test void profileEditingRejectsForeignClassOutsiderInvalidDataAndStaleForm() {
+    @Test void identityCreatedAfterPreviewIsReusedInsteadOfBeingOverwrittenAtCommit() {
+        var input = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n9,SV001,Tên trên CSV,17/05/2003,C2");
+        assertEquals(1, classes.preview(classB, input).count(ClassService.ImportStatus.CREATE));
         classes.importRoster(classA, RosterCsv.parse(CSV));
-        var original = classes.roster(classA).getFirst();
-        assertThrows(IllegalArgumentException.class, () -> other.updateProfile(classA, original, "Sai quyền", original.birthDate(), null));
-        assertThrows(IllegalArgumentException.class, () -> classes.updateProfile(classB, original, "Ngoài lớp", original.birthDate(), null));
-        assertThrows(IllegalArgumentException.class, () -> classes.updateProfile(classA, original, " ", original.birthDate(), null));
-        assertThrows(IllegalArgumentException.class, () -> classes.updateProfile(classA, original, "An", LocalDate.now().plusDays(1), null));
-        assertEquals(original, classes.roster(classA).getFirst());
-        classes.updateProfile(classA, original, "Tên đã sửa", original.birthDate(), "C1");
-        assertThrows(IllegalStateException.class, () -> classes.updateProfile(classA, original, "Ghi đè", original.birthDate(), null));
-        assertEquals("Tên đã sửa", classes.roster(classA).getFirst().fullName());
+        assertEquals(1, classes.importRoster(classB, input).count(ClassService.ImportStatus.ENROLL));
+        assertEquals("Nguyễn An", classes.roster(classB).getFirst().fullName());
+        assertEquals(LocalDate.of(2003, 5, 12), classes.roster(classB).getFirst().birthDate());
+        assertEquals(9, classes.roster(classB).getFirst().ordinal());
     }
-    @Test void profileEditingWaitsForUnfinishedAttemptEvenInAnotherTeachersClass() {
+    @Test void reimportDuringAnotherTeachersAttemptKeepsLoginProfileAndFrozenRoundRoster() {
         classes.importRoster(classA, RosterCsv.parse(CSV));
         var bank = new QuestionBankService(factory::createEntityManager, otherId);
         var subject = bank.createSubject("Môn khác");
@@ -68,11 +64,13 @@ class ClassServiceIntegrationTest {
         var round = exams.activateExam(template.id(), group.id());
         exams.startAttempt("SV001", round.getId()).orElseThrow();
         var original = classes.roster(classA).getFirst();
-        assertThrows(IllegalStateException.class, () -> classes.updateProfile(classA, original, "Tên mới", original.birthDate(), "C2"));
-        assertEquals(original, classes.roster(classA).getFirst());
+        var incoming = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n11,SV001,Tên mới,01/01/2004,C2");
+        assertEquals(1, classes.importRoster(classA, incoming).profileDifferences());
+        assertEquals(original.fullName(), classes.roster(classA).getFirst().fullName());
+        assertEquals(original.birthDate(), classes.roster(classA).getFirst().birthDate());
         exams.submit("SV001", new SubmitExamRequest(round.getId(), Map.of()));
-        assertEquals("Tên mới", classes.updateProfile(classA, original, "Tên mới", original.birthDate(), "C2").fullName());
         assertEquals("Nguyễn An", exams.rosterForRound(round.getId()).getFirst().fullName());
+        assertTrue(new AuthService(factory::createEntityManager, otherId).authenticate("SV001", "2003-05-12").isPresent());
     }
     @Test void reusesIdentityAcrossClassesAndRepeatedImportIsIdempotent() {
         var rows = RosterCsv.parse(CSV);
@@ -98,14 +96,15 @@ class ClassServiceIntegrationTest {
             assertEquals(2L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult());
         }
     }
-    @Test void conflictingIdentityBlocksWholeImportAndNeverOverwritesStudent() {
+    @Test void differentIdentityDoesNotBlockNewStudentsOrEnrollmentsAndNeverOverwritesStudent() {
         classes.importRoster(classA, RosterCsv.parse(CSV));
         var conflict = RosterCsv.parse("student_code,full_name,birth_date\nSV003,Lê Cường,2003-03-03\nSV001,Nguyễn An,2004-05-12");
-        assertTrue(classes.preview(classB, conflict).hasConflicts());
-        assertThrows(IllegalArgumentException.class, () -> classes.importRoster(classB, conflict));
-        assertTrue(classes.roster(classB).isEmpty());
+        assertEquals(1, classes.preview(classB, conflict).profileDifferences());
+        classes.importRoster(classB, conflict);
+        assertEquals(2, classes.roster(classB).size());
+        assertEquals(LocalDate.of(2003, 5, 12), classes.roster(classB).stream().filter(s -> s.code().equals("SV001")).findFirst().orElseThrow().birthDate());
         try (EntityManager em = factory.createEntityManager()) {
-            assertEquals(2L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult());
+            assertEquals(3L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult());
         }
     }
     @Test void teacherCannotUseAnotherTeachersClassOrSubject() {
@@ -172,27 +171,27 @@ class ClassServiceIntegrationTest {
             assertEquals(4L, em.createQuery("select count(s) from ClassStudent s", Long.class).getSingleResult());
         }
     }
-    @Test void fillsPreviouslyMissingRegularClassEvenForAlreadyEnrolledStudent() {
+    @Test void importedCsvOnlyUpdatesClassOrdinalAndDoesNotFillSharedProfileFields() {
         classes.importRoster(classA, RosterCsv.parse(CSV));
         var rows = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,SV001,Nguyễn An,12/05/2003,D23CNPM05");
         assertEquals(1, classes.preview(classA, rows).count(ClassService.ImportStatus.UPDATE));
         assertNull(classes.roster(classA).getFirst().regularClass(), "Xem trước không được ghi dữ liệu");
         classes.importRoster(classA, rows);
-        assertEquals("D23CNPM05", classes.roster(classA).getFirst().regularClass());
+        assertNull(classes.roster(classA).getFirst().regularClass());
         assertEquals(1, classes.importRoster(classA, rows).count(ClassService.ImportStatus.EXISTS));
         classes.importRoster(classB, RosterCsv.parse(CSV));
-        assertEquals("D23CNPM05", classes.roster(classB).getFirst().regularClass(), "Mẫu cũ không xóa lớp chính quy đã có");
+        assertNull(classes.roster(classB).getFirst().regularClass(), "Hồ sơ dùng chung giữ nguyên");
         assertEquals(2, classes.roster(classA).size());
     }
-    @Test void conflictingRegularClassBlocksWholeImportAndKeepsExistingProfile() {
+    @Test void differentRegularClassReusesProfileAndDoesNotBlockWholeImport() {
         classes.importRoster(classA, RosterCsv.parse(RosterCsv.sample()));
         var rows = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,NEW01,Sinh viên mới,07/11/2005,D23A\n2,B23DCCN011,Bùi Thế Anh,07/11/2005,D23CNPM03");
-        assertTrue(classes.preview(classB, rows).hasConflicts());
-        assertThrows(IllegalArgumentException.class, () -> classes.importRoster(classB, rows));
-        assertTrue(classes.roster(classB).isEmpty());
+        assertEquals(1, classes.preview(classB, rows).profileDifferences());
+        classes.importRoster(classB, rows);
+        assertEquals(2, classes.roster(classB).size());
         assertEquals("D23CNPM05", classes.roster(classA).getFirst().regularClass());
         try (EntityManager em = factory.createEntityManager()) {
-            assertEquals(2L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult());
+            assertEquals(3L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult());
         }
     }
 

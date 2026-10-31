@@ -72,19 +72,7 @@ public final class ClassManager extends BorderPane {
         roster.setItems(sortedStudents);
         roster.getColumns().add(UiSupport.column("STT", 60, s -> s.ordinal() == null ? "—" : s.ordinal().toString()));
         roster.getColumns().add(UiSupport.column("Mã sinh viên", 170, ClassService.RosterStudent::code));
-        var names = UiSupport.<ClassService.RosterStudent>column("Họ và tên", 260, ClassService.RosterStudent::fullName);
-        names.setCellFactory(column -> new TableCell<>() {
-            private final Hyperlink link = new Hyperlink();
-            { link.setStyle("-fx-padding: 0;"); link.setOnAction(e -> {
-                var row = getTableRow().getItem();
-                if (row != null && classes.getValue() != null) editProfile(classes.getValue(), row);
-            }); }
-            @Override protected void updateItem(String value, boolean empty) {
-                super.updateItem(value, empty); setText(null);
-                link.setText(empty ? "" : value); setGraphic(empty ? null : link);
-            }
-        });
-        roster.getColumns().add(names);
+        roster.getColumns().add(UiSupport.column("Họ và tên", 260, ClassService.RosterStudent::fullName));
         roster.getColumns().add(UiSupport.column("Ngày sinh", 120, s -> RosterCsv.displayDate(s.birthDate())));
         roster.getColumns().add(UiSupport.column("Lớp chính quy", 140, s -> s.regularClass() == null ? "" : s.regularClass()));
         roster.getColumns().add(UiSupport.column("Kết nối hiện tại", 190, s -> sessions.stream()
@@ -110,40 +98,6 @@ public final class ClassManager extends BorderPane {
                 : allStudents.size() + " sinh viên");
         roster.setPlaceholder(new Label(searching ? "Không tìm thấy sinh viên phù hợp."
                 : "Lớp chưa có sinh viên. Chọn Nhập danh sách CSV để thêm."));
-    }
-    private void editProfile(ClassInfo group, ClassService.RosterStudent student) {
-        Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); AppUi.desktopStyle(dialog.getDialogPane());
-        dialog.setTitle("Sửa hồ sơ sinh viên"); dialog.getDialogPane().setId("student-profile-editor");
-        TextField code = new TextField(student.code()); code.setEditable(false); code.setId("student-profile-code");
-        TextField name = new TextField(student.fullName()); name.setId("student-profile-name");
-        DatePicker birth = new DatePicker(student.birthDate()); birth.setId("student-profile-birth");
-        TextField regular = new TextField(student.regularClass()); regular.setId("student-profile-regular-class");
-        Label original = new Label("Thông tin hiện tại: " + student.fullName() + " · " + RosterCsv.displayDate(student.birthDate())
-                + " · " + (student.regularClass() == null ? "Chưa có lớp chính quy" : student.regularClass())); original.setWrapText(true);
-        Label note = new Label("Hồ sơ dùng chung: thay đổi sẽ cập nhật ở mọi lớp học phần của sinh viên, kể cả lớp của giảng viên khác. Ngày sinh mới dùng để đăng nhập. STT của từng lớp và danh sách ca đã chốt giữ nguyên."); note.setWrapText(true);
-        CheckBox confirm = new CheckBox("Tôi xác nhận cập nhật hồ sơ dùng chung"); confirm.setId("student-profile-confirm");
-        Label error = new Label(); error.setId("student-profile-error"); error.setWrapText(true); error.getStyleClass().add("error-text");
-        dialog.getDialogPane().setContent(new VBox(10, original, new Label("Mã sinh viên"), code,
-                new Label("Họ và tên"), name, new Label("Ngày sinh"), birth, new Label("Lớp chính quy"), regular, note, confirm, error));
-        dialog.getDialogPane().setPrefWidth(580);
-        ButtonType save = new ButtonType("Lưu thay đổi", ButtonBar.ButtonData.OK_DONE);
-        dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
-        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setText("Hủy");
-        var saveButton = dialog.getDialogPane().lookupButton(save); saveButton.setId("student-profile-save");
-        saveButton.disableProperty().bind(confirm.selectedProperty().not());
-        saveButton.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
-            e.consume();
-            final java.time.LocalDate date;
-            try { birth.commitValue(); date = birth.getValue(); }
-            catch (RuntimeException ex) { error.setText("Ngày sinh không hợp lệ."); return; }
-            String fullName = name.getText(), regularClass = regular.getText();
-            dialog.getDialogPane().setDisable(true);
-            UiSupport.async("update-student-profile", () -> service.updateProfile(group.id(), student, fullName, date, regularClass), saved -> {
-                dialog.setResult(true); dialog.close();
-                if (!disposed) { loadRoster(); changed.run(); }
-            }, ex -> { dialog.getDialogPane().setDisable(false); error.setText(ex.getMessage()); });
-        });
-        dialog.showAndWait();
     }
     private void reload(Long selectedId) {
         Long id = selectedId != null ? selectedId : classes.getValue() == null ? null : classes.getValue().id();
@@ -221,21 +175,34 @@ public final class ClassManager extends BorderPane {
         Dialog<Boolean> dialog = new Dialog<>(); dialog.initOwner(owner); dialog.setTitle("Xem trước nhập danh sách · " + c.code());
         AppUi.desktopStyle(dialog.getDialogPane()); dialog.getDialogPane().setId("class-import-preview");
         TableView<ClassService.ImportRow> table = new TableView<>(FXCollections.observableArrayList(preview.rows()));
-        table.getColumns().add(UiSupport.column("STT", 60, r -> r.student().ordinal() == null ? "—" : r.student().ordinal().toString()));
+        table.getColumns().add(UiSupport.column("STT", 60, r -> r.ordinal() == null ? "—" : r.ordinal().toString()));
         table.getColumns().add(UiSupport.column("Mã sinh viên", 130, r -> r.student().code()));
-        table.getColumns().add(UiSupport.column("Họ và tên", 190, r -> r.student().fullName()));
-        table.getColumns().add(UiSupport.column("Ngày sinh", 110, r -> RosterCsv.displayDate(r.student().birthDate())));
-        table.getColumns().add(UiSupport.column("Lớp chính quy", 130, r -> r.student().regularClass() == null ? "" : r.student().regularClass()));
-        table.getColumns().add(UiSupport.column("Xử lý", 260, r -> r.status().toString()));
+        table.getColumns().add(UiSupport.column("Họ và tên", 190, r -> r.profile().fullName()));
+        table.getColumns().add(UiSupport.column("Ngày sinh", 110, r -> RosterCsv.displayDate(r.profile().birthDate())));
+        table.getColumns().add(UiSupport.column("Lớp chính quy", 130, r -> r.profile().regularClass() == null ? "" : r.profile().regularClass()));
+        var action = UiSupport.<ClassService.ImportRow>column("Xử lý", 300, ClassService.ImportRow::actionLabel);
+        action.setCellFactory(column -> new TableCell<>() {
+            @Override protected void updateItem(String value, boolean empty) {
+                super.updateItem(value, empty); setText(empty ? null : value); setTooltip(null); setStyle("");
+                var row = getTableRow() == null ? null : getTableRow().getItem();
+                if (!empty && row != null && row.profileDiffers()) {
+                    setStyle("-fx-text-fill: #9a5b00;");
+                    setTooltip(new Tooltip("CSV: " + row.student().fullName() + " · " + RosterCsv.displayDate(row.student().birthDate())
+                            + " · " + (row.student().regularClass() == null ? "Chưa có lớp chính quy" : row.student().regularClass())
+                            + "\nDùng hồ sơ đã lưu như các cột bên trái; không thay đổi thông tin đăng nhập."));
+                }
+            }
+        });
+        table.getColumns().add(action);
         table.setPrefHeight(300); table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         Label status = new Label(preview.summary()); status.setWrapText(true);
-        Label note = new Label("STT được lấy đúng từ CSV theo từng mã sinh viên trong lớp, không tự đánh lại theo thứ tự bảng. Dòng Cập nhật STT / lớp chính quy bổ sung dữ liệu vào sinh viên đã có; STT trống trên CSV giữ số đã lưu. Lớp trong CSV là lớp chính quy. Danh sách ca đã lưu giữ nguyên."); note.setWrapText(true);
+        Label note = new Label("MSV đã có dùng hồ sơ đang lưu. CSV chỉ thêm vào lớp và cập nhật STT của lớp; không sửa hồ sơ hoặc danh sách ca đã chốt."); note.setWrapText(true);
         dialog.getDialogPane().setContent(new VBox(12, status, table, note)); dialog.getDialogPane().setPrefWidth(950);
         ButtonType save = new ButtonType("Xác nhận nhập", ButtonBar.ButtonData.OK_DONE);
         dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
         ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setText("Hủy");
         var confirm = dialog.getDialogPane().lookupButton(save); confirm.setId("class-import-confirm");
-        confirm.setDisable(preview.hasConflicts() || preview.count(ClassService.ImportStatus.EXISTS) == preview.rows().size());
+        confirm.setDisable(preview.count(ClassService.ImportStatus.EXISTS) == preview.rows().size());
         confirm.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
             e.consume(); dialog.getDialogPane().setDisable(true);
             UiSupport.async("commit-class-import", () -> service.importRoster(c.id(), preview.rows().stream().map(ClassService.ImportRow::student).toList()), result -> {

@@ -16,14 +16,27 @@ final class ExamVariants {
     record Bundle(List<Variant> variants, Map<String, String> assignments) {}
     private ExamVariants() {}
 
+    // Missing legacy metadata is a separate final group; never infer it from a mutable bank question.
+    private static int level(Question question) {
+        Integer value = question.getDifficulty();
+        return value == null || value < 1 || value > 6 ? 7 : value;
+    }
+    static List<Question> orderedQuestions(Exam exam) {
+        return exam.getQuestions().stream().sorted(Comparator.comparingInt(ExamVariants::level)).toList();
+    }
+
     static String create(Exam exam, int count, List<String> candidates) {
         if (count < 1 || count > MAX_VARIANTS) throw new IllegalArgumentException("Số mã đề từ 1 đến 8.");
-        if (count == 1) return null; // Existing one-code rounds retain their original order.
+        if (count == 1) return null; // New rounds are already ordered; existing rounds are never rewritten.
         if (exam.getCourseClass() == null || candidates.isEmpty()) throw new IllegalArgumentException("Chọn danh sách sinh viên để phân mã đề.");
+        Map<Integer, List<Question>> groups = new TreeMap<>();
+        for (Question question : orderedQuestions(exam)) groups.computeIfAbsent(level(question), ignored -> new ArrayList<>()).add(question);
         if (exam.getQuestions().stream().allMatch(ExamVariants::positionalOptions)) {
             int possible = 1;
-            for (int n = 2; n <= exam.getQuestions().size() && possible < count; n++) possible *= n;
-            if (possible < count) throw new IllegalArgumentException("Câu có lựa chọn tham chiếu A/B hoặc ở trên được giữ nguyên lựa chọn. Bộ câu hiện chỉ tạo được " + possible + " mã khác nhau; giảm số mã hoặc thêm câu độc lập.");
+            for (List<Question> group : groups.values()) {
+                for (int n = 2; n <= group.size() && possible < count; n++) possible = Math.min(count, possible * n);
+            }
+            if (possible < count) throw new IllegalArgumentException("Giữ nguyên lựa chọn tham chiếu A/B và chỉ đảo câu trong cùng mức. Bộ câu hiện chỉ tạo được " + possible + " mã khác nhau; giảm số mã hoặc thêm câu cùng mức/câu có lựa chọn độc lập.");
         }
         SecureRandom random = new SecureRandom(); List<Variant> variants = new ArrayList<>();
         Set<List<Entry>> used = new HashSet<>();
@@ -31,12 +44,16 @@ final class ExamVariants {
             List<Entry> entries = null;
             for (int retry = 0; retry < 100; retry++) {
                 var next = new ArrayList<Entry>();
-                for (Question q : exam.getQuestions()) {
-                    var options = new ArrayList<>(List.of(0, 1, 2, 3));
-                    if (!positionalOptions(q)) Collections.shuffle(options, random);
-                    next.add(new Entry(q.getId(), List.copyOf(options)));
+                for (List<Question> group : groups.values()) {
+                    var entriesInLevel = new ArrayList<Entry>();
+                    for (Question q : group) {
+                        var options = new ArrayList<>(List.of(0, 1, 2, 3));
+                        if (!positionalOptions(q)) Collections.shuffle(options, random);
+                        entriesInLevel.add(new Entry(q.getId(), List.copyOf(options)));
+                    }
+                    Collections.shuffle(entriesInLevel, random);
+                    next.addAll(entriesInLevel);
                 }
-                Collections.shuffle(next, random);
                 if (used.add(next)) { entries = List.copyOf(next); break; }
             }
             if (entries == null) throw new IllegalStateException("Chưa tạo đủ mã khác nhau. Hãy thử lại.");

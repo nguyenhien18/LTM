@@ -13,6 +13,11 @@ public class Submission {
     private String variantCode;
     @Column(name = "automatic_submission")
     private Boolean automaticSubmission;
+    @Column(name = "disqualification_reason", length = 1000)
+    private String disqualificationReason;
+    public String getDisqualificationReason() { return disqualificationReason; }
+    public boolean isDisqualified() { return disqualificationReason != null && !disqualificationReason.isBlank(); }
+    public void setDisqualificationReason(String reason) { disqualificationReason = reason; }
     public boolean isAutomaticSubmission() { return Boolean.TRUE.equals(automaticSubmission); }
     public void setAutomaticSubmission(boolean value) { automaticSubmission = value; }
     public String getVariantCode() { return variantCode; }

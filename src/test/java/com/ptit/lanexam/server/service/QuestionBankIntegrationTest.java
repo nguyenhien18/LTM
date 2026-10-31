@@ -73,7 +73,7 @@ class QuestionBankIntegrationTest {
     }
 
     @Test
-    void examUsesChosenQuestionOrderSubjectAndDifficulty() {
+    void examOrdersQuestionsBySnapshotDifficultyAndKeepsSubject() {
         BankQuestionInfo first = bank.createQuestion(choice(networks.id(), 2, "Câu thứ nhất", "A"));
         BankQuestionInfo second = bank.createQuestion(choice(networks.id(), 5, "Câu thứ hai", "B"));
         ExamSummary created = exams.createExamFromBank(new BankExamDraft("Đề mạng", 25, networks.id(), List.of(second.id(), first.id())));
@@ -82,12 +82,12 @@ class QuestionBankIntegrationTest {
         try (EntityManager em = factory.createEntityManager()) {
             Exam template = em.find(Exam.class, created.id());
             assertEquals(networks.id(), template.getSubject().getId());
-            assertEquals(List.of(second.id(), first.id()), template.getQuestions().stream().map(Question::getBankQuestionId).toList());
-            assertEquals(List.of(5, 2), template.getQuestions().stream().map(Question::getDifficulty).toList());
+            assertEquals(List.of(first.id(), second.id()), template.getQuestions().stream().map(Question::getBankQuestionId).toList());
+            assertEquals(List.of(2, 5), template.getQuestions().stream().map(Question::getDifficulty).toList());
         }
         var round = exams.activateExam(created.id());
         assertEquals("Lập trình mạng", round.getSubjectName());
-        assertEquals(List.of("Câu thứ hai", "Câu thứ nhất"), round.getQuestions().stream().map(q -> q.getContent()).toList());
+        assertEquals(List.of("Câu thứ nhất", "Câu thứ hai"), round.getQuestions().stream().map(q -> q.getContent()).toList());
         assertEquals("Lập trình mạng", exams.findOffer("ST001", round.getId()).orElseThrow().subjectName());
         String json = JsonUtil.toJson(JsonUtil.message(MessageType.EXAM_STARTED, round));
         assertFalse(json.contains("correctAnswer"), "Đáp án đúng không được gửi sang Client.");

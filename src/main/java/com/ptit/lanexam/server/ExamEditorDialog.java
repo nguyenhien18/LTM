@@ -52,6 +52,7 @@ public final class ExamEditorDialog {
         selected.getColumns().add(UiSupport.column("Độ khó", 65, q -> Integer.toString(q.difficulty())));
         selected.getColumns().add(QuestionDetailsDialog.contentColumn("Câu hỏi", 220,
                 question -> QuestionDetailsDialog.show(dialog.getDialogPane().getScene().getWindow(), question)));
+        selected.getColumns().forEach(column -> column.setSortable(false));
         selected.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         selected.setPlaceholder(new Label("Chưa có câu trong đề. Chọn câu ở bảng ngân hàng rồi bấm Thêm vào đề."));
         Label count = new Label();
@@ -91,7 +92,9 @@ public final class ExamEditorDialog {
                 dialog.getDialogPane().getContent().setDisable(true);
                 UiSupport.async("draw-random-exam", () -> service.drawQuestions(subjectId, counts, java.util.Set.of()), questions -> {
                     if (!dialog.isShowing()) return;
-                    dialog.getDialogPane().getContent().setDisable(false); chosen.setAll(questions); selected.getSelectionModel().selectFirst(); error.setText("");
+                    dialog.getDialogPane().getContent().setDisable(false); chosen.setAll(questions);
+                    chosen.sort(java.util.Comparator.comparingInt(BankQuestionInfo::difficulty));
+                    selected.getSelectionModel().selectFirst(); error.setText("");
                 }, ex -> { if (dialog.isShowing()) { dialog.getDialogPane().getContent().setDisable(false); error.setText(ex.getMessage()); } });
             } catch (IllegalArgumentException ex) { error.setText(ex.getMessage()); }
         });
@@ -117,6 +120,7 @@ public final class ExamEditorDialog {
                     else chosen.remove(i);
                     break;
                 }
+            chosen.sort(java.util.Comparator.comparingInt(BankQuestionInfo::difficulty));
         });
         Button add = new Button("Thêm vào đề");
         add.setId("exam-add-selected");
@@ -128,6 +132,7 @@ public final class ExamEditorDialog {
                 error.setText("Mỗi đề tối đa " + ExamService.MAX_BANK_EXAM_QUESTIONS + " câu."); return;
             }
             chosen.addAll(additions);
+            chosen.sort(java.util.Comparator.comparingInt(BankQuestionInfo::difficulty));
             error.setText(additions.isEmpty() ? "Các câu đã chọn đều có trong đề." : "");
         });
         Button remove = new Button("Bỏ câu đã chọn");
@@ -138,6 +143,8 @@ public final class ExamEditorDialog {
         Button down = new Button("Xuống");
         up.setId("exam-move-up");
         down.setId("exam-move-down");
+        up.setTooltip(new Tooltip("Đổi thứ tự trong cùng mức độ khó"));
+        down.setTooltip(new Tooltip("Đổi thứ tự trong cùng mức độ khó"));
         up.setOnAction(event -> move(selected, chosen, -1));
         down.setOnAction(event -> move(selected, chosen, 1));
         Label bankHeading = new Label("Ngân hàng câu hỏi");
@@ -145,7 +152,7 @@ public final class ExamEditorDialog {
         VBox bankSection = new VBox(5, bankHeading, bank, add);
         bankSection.getStyleClass().add("surface");
         VBox.setVgrow(bank, Priority.ALWAYS);
-        Label selectedHeading = new Label("Câu hỏi trong đề");
+        Label selectedHeading = new Label("Câu hỏi trong đề · Mức 1 → 6");
         HBox selectedActions = AppUi.toolbar(remove, replace, up, down);
         VBox selectedSection = new VBox(6, selectedHeading, selected, selectedActions);
         selectedSection.getStyleClass().add("surface");
@@ -185,6 +192,7 @@ public final class ExamEditorDialog {
         int index = table.getSelectionModel().getSelectedIndex();
         int next = index + delta;
         if (index < 0 || next < 0 || next >= questions.size()) return;
+        if (questions.get(index).difficulty() != questions.get(next).difficulty()) return;
         Collections.swap(questions, index, next);
         table.getSelectionModel().clearAndSelect(next);
         table.scrollTo(next);

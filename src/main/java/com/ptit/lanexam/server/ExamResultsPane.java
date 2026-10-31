@@ -37,6 +37,7 @@ final class ExamResultsPane extends BorderPane {
         table.getColumns().add(UiSupport.column("Mã đề", 70, r -> r.variantCode() == null ? "Gốc" : r.variantCode()));
         table.getColumns().add(UiSupport.column("Họ tên", 180, ExamResultRow::fullName));
         table.getColumns().add(UiSupport.column("Trạng thái", 170, r -> r.status().toString()));
+        table.getColumns().add(UiSupport.column("Lý do", 200, r -> r.reason() == null ? "" : r.reason()));
         table.getColumns().add(UiSupport.column("Đề / Lớp", 270, ExamResultRow::examTitle));
         table.getColumns().add(UiSupport.column("Điểm", 85, r -> r.score() == null ? "" : String.format(Locale.ROOT, "%.2f", r.score())));
         table.getColumns().add(UiSupport.column("Đúng", 70, r -> r.correct() == null ? "" : r.correct() + "/" + r.total()));

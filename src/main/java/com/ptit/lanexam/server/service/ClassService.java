@@ -17,18 +17,25 @@ public final class ClassService {
     }
     public enum ImportStatus {
         CREATE("Tạo sinh viên và thêm vào lớp"), ENROLL("Thêm sinh viên đã có vào lớp"),
-        UPDATE("Cập nhật STT / lớp chính quy"), EXISTS("Đã có trong lớp · bỏ qua"), CONFLICT("Trùng mã nhưng khác thông tin");
+        UPDATE("Cập nhật STT trong lớp"), EXISTS("Đã có trong lớp · bỏ qua");
         private final String label;
         ImportStatus(String label) { this.label = label; }
         @Override public String toString() { return label; }
     }
-    public record ImportRow(RosterCsv.StudentRow student, ImportStatus status) {}
+    public record ImportRow(RosterCsv.StudentRow student, ImportStatus status, RosterStudent storedProfile, boolean profileDiffers) {
+        public RosterStudent profile() {
+            return storedProfile != null ? storedProfile : new RosterStudent(student.code(), student.fullName(), student.birthDate(), student.regularClass(), student.ordinal());
+        }
+        public Integer ordinal() { return student.ordinal() != null ? student.ordinal() : storedProfile == null ? null : storedProfile.ordinal(); }
+        public String actionLabel() { return status + (profileDiffers ? " · Giữ hồ sơ đã lưu (CSV khác)" : ""); }
+    }
     public record ImportPreview(List<ImportRow> rows) {
         public ImportPreview { rows = List.copyOf(rows); }
-        public boolean hasConflicts() { return rows.stream().anyMatch(r -> r.status() == ImportStatus.CONFLICT); }
+        public long profileDifferences() { return rows.stream().filter(ImportRow::profileDiffers).count(); }
         public long count(ImportStatus status) { return rows.stream().filter(r -> r.status() == status).count(); }
         public String summary() { return count(ImportStatus.CREATE) + " sinh viên mới · " + count(ImportStatus.ENROLL)
-                + " thêm vào lớp · " + count(ImportStatus.UPDATE) + " cập nhật · " + count(ImportStatus.EXISTS) + " đã có · " + count(ImportStatus.CONFLICT) + " xung đột"; }
+                + " thêm vào lớp · " + count(ImportStatus.UPDATE) + " cập nhật STT · " + count(ImportStatus.EXISTS) + " đã có"
+                + (profileDifferences() == 0 ? "" : " · " + profileDifferences() + " khác CSV — giữ hồ sơ đã lưu"); }
     }
     public ClassInfo create(String code, String name, String semester, Long subjectId) {
         code = required(code, 40, "Mã lớp").toUpperCase(Locale.ROOT);
@@ -76,35 +83,6 @@ public final class ClassService {
                             c.getId(), c.getCode(), c.getName(), c.getSubject().getName(), c.getSemester())).toList();
         }
     }
-    public RosterStudent updateProfile(Long classId, RosterStudent expected, String fullName,
-                                       java.time.LocalDate birthDate, String regularClass) {
-        if (expected == null) throw new IllegalArgumentException("Chọn sinh viên cần sửa.");
-        String name = required(fullName, 120, "Họ tên");
-        String regular = regularClass == null || regularClass.isBlank() ? null : required(regularClass, 80, "Lớp chính quy");
-        if (birthDate == null || birthDate.isAfter(java.time.LocalDate.now()) || birthDate.getYear() < 1900)
-            throw new IllegalArgumentException("Ngày sinh phải hợp lệ, từ năm 1900 đến hôm nay.");
-        try (EntityManager em = managers.get()) {
-            try {
-                em.getTransaction().begin();
-                CourseClass group = requireClass(em, classId, scope);
-                em.lock(group, LockModeType.PESSIMISTIC_WRITE);
-                requireEnrollment(em, classId, expected.code(), scope);
-                Student student = em.createQuery("select s from Student s where s.studentCode = :code", Student.class)
-                        .setParameter("code", expected.code()).setLockMode(LockModeType.PESSIMISTIC_WRITE).getSingleResult();
-                if (!student.getFullName().equals(expected.fullName()) || !student.getBirthDate().equals(expected.birthDate())
-                        || !Objects.equals(student.getRegularClass(), expected.regularClass()))
-                    throw new IllegalStateException("Hồ sơ đã được cập nhật ở nơi khác. Đóng cửa sổ, làm mới danh sách rồi sửa lại.");
-                long unfinished = em.createQuery("select count(a) from ExamAttempt a where a.student = :student and a.submittedAt is null", Long.class)
-                        .setParameter("student", student).getSingleResult();
-                if (unfinished > 0) throw new IllegalStateException("Sinh viên đang có lượt thi chưa kết thúc hoặc đang chấm. Chờ hoàn tất trước khi sửa hồ sơ.");
-                student.setFullName(name); student.setBirthDate(birthDate); student.setRegularClass(regular);
-                Integer ordinal = em.createQuery("select cs from ClassStudent cs where cs.courseClass = :class and cs.student = :student", ClassStudent.class)
-                        .setParameter("class", group).setParameter("student", student).getSingleResult().getOrdinal();
-                RosterStudent result = rosterStudent(student, ordinal);
-                em.getTransaction().commit(); return result;
-            } catch (RuntimeException ex) { if (em.getTransaction().isActive()) em.getTransaction().rollback(); throw ex; }
-        }
-    }
     public ImportPreview preview(Long classId, List<RosterCsv.StudentRow> rows) {
         validate(rows);
         try (EntityManager em = managers.get()) {
@@ -120,7 +98,6 @@ public final class ClassService {
                 CourseClass c = classId == null ? null : em.find(CourseClass.class, classId, LockModeType.PESSIMISTIC_WRITE);
                 scope.require(c);
                 ImportPreview preview = inspect(em, classId, rows);
-                if (preview.hasConflicts()) throw new IllegalArgumentException("Có mã sinh viên khác họ tên, ngày sinh hoặc lớp chính quy. Sửa CSV và xem trước lại; chưa nhập dữ liệu nào.");
                 for (ImportRow row : preview.rows()) {
                     if (row.status() == ImportStatus.EXISTS) continue;
                     RosterCsv.StudentRow input = row.student();
@@ -128,9 +105,6 @@ public final class ClassService {
                             .setParameter("code", input.code()).setLockMode(LockModeType.PESSIMISTIC_WRITE)
                             .getResultStream().findFirst().orElse(null);
                     if (student == null) { student = new Student(input.code(), input.fullName(), input.birthDate(), input.regularClass()); em.persist(student); }
-                    else if (!same(student, input)) throw new IllegalArgumentException("Thông tin sinh viên đã thay đổi. Hãy xem trước CSV lại.");
-                    if ((student.getRegularClass() == null || student.getRegularClass().isBlank()) && input.regularClass() != null)
-                        student.setRegularClass(input.regularClass());
                     ClassStudent enrollment;
                     if (row.status() == ImportStatus.UPDATE) {
                         enrollment = em.createQuery("select cs from ClassStudent cs where cs.courseClass = :class and cs.student = :student", ClassStudent.class)
@@ -158,12 +132,11 @@ public final class ClassService {
             throw new IllegalArgumentException("STT " + ordinal + " bị trùng trong danh sách lớp sau khi nhập. Sửa STT trên CSV trước khi nhập lại.");
         return new ImportPreview(rows.stream().map(row -> {
             Student s = students.get(row.code());
-            if (s == null) return new ImportRow(row, ImportStatus.CREATE);
-            if (!same(s, row)) return new ImportRow(row, ImportStatus.CONFLICT);
-            if (!enrolled.containsKey(row.code())) return new ImportRow(row, ImportStatus.ENROLL);
-            boolean missingClass = (s.getRegularClass() == null || s.getRegularClass().isBlank()) && row.regularClass() != null;
+            if (s == null) return new ImportRow(row, ImportStatus.CREATE, null, false);
+            RosterStudent stored = rosterStudent(s, enrolled.containsKey(row.code()) ? enrolled.get(row.code()).getOrdinal() : null);
+            if (!enrolled.containsKey(row.code())) return new ImportRow(row, ImportStatus.ENROLL, stored, !same(s, row));
             boolean changedOrdinal = row.ordinal() != null && !Objects.equals(enrolled.get(row.code()).getOrdinal(), row.ordinal());
-            return new ImportRow(row, missingClass || changedOrdinal ? ImportStatus.UPDATE : ImportStatus.EXISTS);
+            return new ImportRow(row, changedOrdinal ? ImportStatus.UPDATE : ImportStatus.EXISTS, stored, !same(s, row));
         }).toList());
     }
     static CourseClass requireClass(EntityManager em, Long id, TeacherScope scope) {
@@ -182,8 +155,8 @@ public final class ClassService {
     }
     private static boolean same(Student s, RosterCsv.StudentRow row) {
         return s.getBirthDate().equals(row.birthDate()) && normalized(s.getFullName()).equals(normalized(row.fullName()))
-                && (s.getRegularClass() == null || s.getRegularClass().isBlank() || row.regularClass() == null
-                    || normalized(s.getRegularClass()).equals(normalized(row.regularClass())));
+                && (row.regularClass() == null || s.getRegularClass() != null
+                    && normalized(s.getRegularClass()).equals(normalized(row.regularClass())));
     }
     private static String normalized(String name) { return java.text.Normalizer.normalize(name.strip().replaceAll("\\s+", " "), java.text.Normalizer.Form.NFC).toLowerCase(Locale.ROOT); }
     private static String required(String text, int max, String name) {

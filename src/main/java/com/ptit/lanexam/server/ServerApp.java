@@ -65,6 +65,7 @@ public class ServerApp extends Application {
     private QuestionBankBrowser bankBrowser;
     private ExamTemplateManager templateManager;
     private Label connectionState;
+    private ExamNotificationCenter notifications;
 
     public ServerApp() {
         this(JpaUtil::em, () -> {
@@ -178,7 +179,8 @@ public class ServerApp extends Application {
         sidebar.setMinWidth(185);
         sidebar.getStyleClass().add("sidebar");
 
-        HBox topbar = AppUi.toolbar(connectionState, addressLabel, AppUi.spacer(), teacherLabel);
+        notifications = new ExamNotificationCenter(mainStage, examService.events(), () -> server);
+        HBox topbar = AppUi.toolbar(connectionState, addressLabel, AppUi.spacer(), notifications.badge(), teacherLabel);
         topbar.getStyleClass().add("topbar");
         pageHost = new BorderPane();
         BorderPane workspace = new BorderPane(pageHost);
@@ -192,7 +194,7 @@ public class ServerApp extends Application {
 
         pages.put("room", roomPage());
         showPage("classes");
-        mainStage.setScene(AppUi.desktopScene(root, 1280, 780));
+        mainStage.setScene(AppUi.desktopScene(new StackPane(root, notifications.toast()), 1280, 780));
         mainStage.setMinWidth(1080);
         mainStage.setMinHeight(680);
         mainStage.setTitle("LAN Exam — " + teacher.fullName());
@@ -419,6 +421,7 @@ public class ServerApp extends Application {
     }
 
     private void disposePages() {
+        if (notifications != null) { notifications.dispose(); notifications = null; }
         if (classManager != null) classManager.dispose();
         if (bankBrowser != null) bankBrowser.dispose();
         if (templateManager != null) templateManager.dispose();

@@ -8,7 +8,7 @@ import java.time.Instant;
         columnNames = {"exam_id", "student_id", "event_key"}),
         indexes = @Index(name = "idx_exam_events_student", columnList = "exam_id,student_id"))
 public class ExamEvent {
-    public enum Kind { FOCUS_LOST, MANUAL_WARNING, REVIEWED, DISCONNECTED, RECONNECTED }
+    public enum Kind { FOCUS_LOST, MANUAL_WARNING, REVIEWED, DISCONNECTED, RECONNECTED, DISQUALIFIED }
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) private Long id;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "exam_id", nullable = false) private Exam exam;
     @ManyToOne(fetch = FetchType.LAZY, optional = false) @JoinColumn(name = "student_id", nullable = false) private Student student;
@@ -22,6 +22,7 @@ public class ExamEvent {
         this.exam = exam; this.student = student; this.eventKey = eventKey; this.kind = kind; occurredAt = at; this.detail = detail;
     }
     public Long getId() { return id; }
+    public Exam getExam() { return exam; }
     public Student getStudent() { return student; }
     public Kind getKind() { return kind; }
     public Instant getOccurredAt() { return occurredAt; }

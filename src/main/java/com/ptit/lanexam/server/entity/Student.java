@@ -22,7 +22,6 @@ public class Student {
     @Column(name = "regular_class", length = 80)
     private String regularClass;
     public String getRegularClass() { return regularClass; }
-    public void setRegularClass(String value) { regularClass = value; }
 
     @Column(name = "account_locked", nullable = false, columnDefinition = "boolean default false")
     private boolean accountLocked;
@@ -42,11 +41,8 @@ public class Student {
 
     public Long getId() { return id; }
     public String getStudentCode() { return studentCode; }
-    public void setStudentCode(String studentCode) { this.studentCode = studentCode; }
     public String getFullName() { return fullName; }
-    public void setFullName(String fullName) { this.fullName = fullName; }
     public LocalDate getBirthDate() { return birthDate; }
-    public void setBirthDate(LocalDate birthDate) { this.birthDate = birthDate; }
     public boolean isAccountLocked() { return accountLocked; }
     public String getLockReason() { return lockReason; }
     public void setAccountLock(boolean locked, String reason) {

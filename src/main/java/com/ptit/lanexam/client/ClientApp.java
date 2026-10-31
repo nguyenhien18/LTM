@@ -76,6 +76,7 @@ public class ClientApp extends Application {
     private Alert submitConfirmation;
     private ExamFocusMonitor focusMonitor;
     private Label warningBanner;
+    private boolean disqualificationPending;
     private record StudentResult(String title, String score, java.time.LocalDateTime submittedAt, String detail) {}
 
     @Override
@@ -106,6 +107,7 @@ public class ClientApp extends Application {
     }
 
     private void showLoginScene() {
+        disqualificationPending = false;
         if (focusMonitor != null) focusMonitor.stop();
         dashboardVisible = false;
         dashboardScene = null;
@@ -204,7 +206,7 @@ public class ClientApp extends Application {
                 try {
                     client.connect(host, finalPort);
                     client.send(JsonUtil.message(MessageType.LOGIN,
-                            new LoginRequest(code, birthDate.toString(), true)));
+                            new LoginRequest(code, birthDate.toString(), true, true)));
                     Platform.runLater(() -> {
                         if (version == connectionVersion) connectionLabel.setText("Đã kết nối, đang xác thực...");
                     });
@@ -243,6 +245,16 @@ public class ClientApp extends Application {
                     case EXAM_STARTED -> showExam(JsonUtil.payload(message, ExamDto.class));
                     case SUBMIT_RESULT -> showResult(JsonUtil.payload(message, SubmitResult.class));
                     case VIOLATION_WARNING -> showModerationNotice(message.getPayload().asText(), false);
+                    case EXAM_DISQUALIFIED -> {
+                        var notice = JsonUtil.payload(message, ExamDisqualification.class);
+                        if (currentExam != null && currentExam.getId().equals(notice.examId())) {
+                            disqualificationPending = true;
+                            if (submitConfirmation != null) submitConfirmation.close();
+                            focusMonitor.stop(); if (timer != null) timer.stop();
+                            stage.getScene().getRoot().setDisable(true);
+                            showModerationNotice("Bài thi bị đình chỉ. Lý do: " + notice.reason(), false);
+                        }
+                    }
                     case EXAM_WARNING_STATUS -> {
                         var warning = JsonUtil.payload(message, ExamWarningStatus.class);
                         if (currentExam != null && currentExam.getId().equals(warning.examId()) && warningBanner != null) {
@@ -257,6 +269,7 @@ public class ClientApp extends Application {
                         showModerationNotice(message.getPayload().asText(), true);
                     }
                     case ERROR -> {
+                        if (disqualificationPending) return;
                         if (stage.getScene().lookup("#login-connect") != null) {
                             rejectLogin(message.getPayload().asText());
                             return;
@@ -416,6 +429,7 @@ public class ClientApp extends Application {
     }
 
     private void showExam(ExamDto exam) {
+        disqualificationPending = false;
         dashboardVisible = false;
         if (dashboardTimer != null) dashboardTimer.stop();
         availableExam = null;
@@ -606,12 +620,14 @@ public class ClientApp extends Application {
         if (dashboardTimer != null) dashboardTimer.stop();
         if (timer != null) timer.stop();
         currentExam = null;
-        Label title = new Label("Đã nộp bài");
+        Label title = new Label(disqualificationPending ? "Vi phạm quy chế" : "Đã nộp bài");
+        disqualificationPending = false;
         title.getStyleClass().add("page-title");
         Label score = new Label(String.format("Điểm: %.2f / 10", result.getScore()));
         score.getStyleClass().add("score");
         Label detail = new Label("Đúng " + result.getCorrectCount() + "/" + result.getTotalQuestions() + " câu");
         Label message = new Label(result.getMessage());
+        message.setWrapText(true); message.setMaxWidth(560);
 
         Button waitButton = new Button("Về trang chính");
         waitButton.getStyleClass().add("primary");

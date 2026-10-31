@@ -52,19 +52,25 @@ class ExamWarningIntegrationTest {
         assertEquals(1, episode(peer, round.getId(), 3000, true).count());
         var second = episode(peer, round.getId(), 5000, false); assertEquals(2, second.count()); assertFalse(second.needsReview());
         var third = episode(peer, round.getId(), 7000, false); assertEquals(3, third.count()); assertTrue(third.needsReview());
+        var firstNotice = exams.events().notices().getFirst(); assertTrue(firstNotice.pending());
         peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, new ExamFocusChange(round.getId() + 10000, UUID.randomUUID().toString(), false)));
         ping(peer);
         assertEquals(3, exams.events().status(round.getId(), "ST001", "").count());
         exams.events().review(round.getId(), "ST001"); assertFalse(exams.events().status(round.getId(), "ST001", "").needsReview());
+        assertFalse(episode(peer, round.getId(), 4000, false).needsReview());
+        assertFalse(episode(peer, round.getId(), 4000, false).needsReview());
         assertTrue(episode(peer, round.getId(), 4000, false).needsReview());
+        assertEquals(1, exams.events().notices().size());
+        assertNotEquals(firstNotice.token(), exams.events().notices().getFirst().token());
         server.remindExam(round.getId(), "ST001", "Tập trung làm bài");
         assertEquals("Tập trung làm bài", await(peer, MessageType.VIOLATION_WARNING).getPayload().asText());
+        assertFalse(exams.events().notices().getFirst().pending());
         assertTrue(exams.events().list(round.getId(), "ST001").stream().anyMatch(e -> e.kind() == Kind.MANUAL_WARNING));
         long question = round.getQuestions().getFirst().getId();
         peer.client.send(JsonUtil.message(MessageType.SUBMIT_EXAM, new SubmitExamRequest(round.getId(), Map.of(question, "A"))));
         assertEquals(10.0, JsonUtil.payload(await(peer, MessageType.SUBMIT_RESULT), SubmitResult.class).getScore());
         peer.client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, new ExamFocusChange(round.getId(), UUID.randomUUID().toString(), false)));
-        ping(peer); assertEquals(4, exams.events().status(round.getId(), "ST001", "").count());
+        ping(peer); assertEquals(6, exams.events().status(round.getId(), "ST001", "").count());
     }
     @Test void historySurvivesReconnectRestartAndReviewIsScopedToTeacherAndRound() throws Exception {
         var round = server.openExam(templateId, classId).exam(); var peer = login();
@@ -90,10 +96,75 @@ class ExamWarningIntegrationTest {
         assertEquals(0, exams.events().status(next.getId(), "ST001", "").count());
         assertEquals(1, exams.events().status(round.getId(), "ST001", "").count());
     }
+    @Test void notificationQueueIsGroupedAndPersistsItsReviewBaselineAcrossServices() throws Exception {
+        var round = server.openExam(templateId, classId).exam(); exams.startAttempt("ST001", round.getId()); exams.startAttempt("ST002", round.getId());
+        for (String code : List.of("ST001", "ST002")) for (int i = 0; i < 3; i++)
+            exams.events().focusReturned(round.getId(), code, UUID.randomUUID().toString(), clock.instant().minusSeconds(4), clock.instant());
+        var queue = exams.events().notices(); assertEquals(2, queue.size()); assertTrue(queue.stream().allMatch(ExamEventService.Notice::pending));
+        String token = queue.stream().filter(n -> n.studentCode().equals("ST001")).findFirst().orElseThrow().token();
+        for (int i = 0; i < 2; i++) exams.events().focusReturned(round.getId(), "ST001", UUID.randomUUID().toString(), clock.instant().minusSeconds(4), clock.instant());
+        assertEquals(token, exams.events().notices().stream().filter(n -> n.studentCode().equals("ST001")).findFirst().orElseThrow().token(), "More events update the same pending notice");
+        exams.events().list(round.getId(), "ST001"); assertTrue(exams.events().notices().stream().allMatch(ExamEventService.Notice::pending), "Viewing is not handling");
+        exams.events().review(round.getId(), "ST001");
+        var reloaded = new ExamEventService(factory::createEntityManager, teacherId, clock);
+        for (int i = 1; i <= 3; i++) {
+            reloaded.focusReturned(round.getId(), "ST001", UUID.randomUUID().toString(), clock.instant().minusSeconds(4), clock.instant());
+            var notice = reloaded.notices().stream().filter(n -> n.studentCode().equals("ST001")).findFirst().orElseThrow();
+            assertEquals(i == 3, notice.pending()); assertEquals(5 + i, notice.count());
+        }
+        var other = new TeacherAccountService(factory::createEntityManager).create("foreign", "Other", "Matkhau123!");
+        assertTrue(new ExamEventService(factory::createEntityManager, other.id(), clock).notices().isEmpty());
+    }
+    @Test void disqualificationEndsOnlyOneAttemptAndSendsZeroScoreWithoutLockingTheAccount() throws Exception {
+        var round = server.openExam(templateId, classId).exam(); var peer = login();
+        peer.client.send(JsonUtil.message(MessageType.JOIN_EXAM, new JoinExamRequest(round.getId())));
+        await(peer, MessageType.EXAM_STARTED); await(peer, MessageType.EXAM_WARNING_STATUS);
+        long question = round.getQuestions().getFirst().getId();
+        peer.client.send(JsonUtil.message(MessageType.ANSWER_UPDATE, new SubmitExamRequest(round.getId(), Map.of(question, "A")))); ping(peer);
+        clock.now = clock.now.plusSeconds(1);
+        server.disqualify(round.getId(), "ST001", "Sử dụng tài liệu không được phép");
+        assertEquals(round.getId(), JsonUtil.payload(await(peer, MessageType.EXAM_DISQUALIFIED), ExamDisqualification.class).examId());
+        var result = JsonUtil.payload(await(peer, MessageType.SUBMIT_RESULT), SubmitResult.class);
+        assertEquals(0, result.getScore()); assertEquals(1, result.getCorrectCount()); assertTrue(result.getMessage().contains("Sử dụng tài liệu"));
+        var row = exams.listRoundResults().stream().filter(r -> r.studentCode().equals("ST001")).findFirst().orElseThrow();
+        assertEquals(ExamResultRow.Status.DISQUALIFIED, row.status()); assertEquals(0.0, row.score()); assertNotNull(row.reason());
+        assertTrue(ExamResultsCsv.format(List.of(row)).contains("Vi phạm quy chế"));
+        assertTrue(ExamResultsCsv.format(List.of(row)).contains("Sử dụng tài liệu"));
+        assertEquals("Vi phạm quy chế", exams.roundProgress(classId, null).orElseThrow().state("ST001", clock.instant()));
+        assertFalse(new AuthService(factory::createEntityManager, teacherId).isAccountLocked("ST001"));
+        assertTrue(exams.startAttempt("ST001", round.getId()).isEmpty());
+        assertEquals(0, exams.submit("ST001", new SubmitExamRequest(round.getId(), Map.of(question, "A"))).getScore());
+        server.disqualify(round.getId(), "ST001", "Lặp lại"); assertEquals(row.reason(), exams.listRoundResults().stream().filter(r -> r.studentCode().equals("ST001")).findFirst().orElseThrow().reason());
+        assertTrue(exams.startAttempt("ST002", round.getId()).isPresent());
+        assertEquals(10, exams.submit("ST002", new SubmitExamRequest(round.getId(), Map.of(question, "A"))).getScore());
+        assertThrows(IllegalStateException.class, () -> server.disqualify(round.getId(), "ST002", "Bài đã nộp"));
+        server.endExam(round.getId()); var next = server.openExam(templateId, classId).exam();
+        assertTrue(exams.findOffer("ST001", next.getId()).isPresent()); assertTrue(server.isRunning());
+    }
+    @Test void offlineDisqualificationDrainsTimelyAnswersAndChecksScopeAndReason() throws Exception {
+        var round = server.openExam(templateId, classId).exam(); exams.startAttempt("ST001", round.getId());
+        long question = round.getQuestions().getFirst().getId();
+        var other = new TeacherAccountService(factory::createEntityManager).create("foreign", "Other", "Matkhau123!");
+        assertThrows(IllegalArgumentException.class, () -> new ExamService(factory::createEntityManager, other.id(), clock).disqualify(round.getId(), "ST001", "Sai quyền"));
+        assertThrows(IllegalArgumentException.class, () -> server.disqualify(round.getId(), "ST001", " "));
+        assertThrows(IllegalArgumentException.class, () -> server.disqualify(round.getId(), "ST002", "Chưa vào bài"));
+        try (var receipt = exams.receiveRequest()) {
+            receipt.bind("ST001", round.getId()); clock.now = clock.now.plusSeconds(1);
+            server.disqualify(round.getId(), "ST001", "Trao đổi bài");
+            assertTrue(exams.getExamResult("ST001", round.getId()).isEmpty()); assertFalse(server.canDisqualify(round.getId(), "ST001"));
+            exams.updateAnswers("ST001", new SubmitExamRequest(round.getId(), Map.of(question, "A")), receipt.receivedAt());
+        }
+        exams.updateAnswers("ST001", new SubmitExamRequest(round.getId(), Map.of(question, "B")), clock.instant());
+        exams.finalizeExpiredAttempts();
+        var result = exams.getExamResult("ST001", round.getId()).orElseThrow(); assertEquals(0, result.getScore()); assertEquals(1, result.getCorrectCount());
+        var restarted = new ExamService(factory::createEntityManager, teacherId, clock);
+        assertEquals(ExamResultRow.Status.DISQUALIFIED, restarted.listResults().getFirst().status());
+        assertTrue(restarted.listStudentHistory("ST001").getFirst().examTitle().contains("Vi phạm quy chế"));
+    }
     private Peer login() throws Exception {
         var queue = new LinkedBlockingQueue<NetworkMessage>(); var client = new LanClient(); client.setMessageListener(queue::add);
         clients.add(client); client.connect("127.0.0.1", server.getPort());
-        client.send(JsonUtil.message(MessageType.LOGIN, new LoginRequest("ST001", "2003-05-12", true)));
+        client.send(JsonUtil.message(MessageType.LOGIN, new LoginRequest("ST001", "2003-05-12", true, true)));
         var peer = new Peer(client, queue); await(peer, MessageType.LOGIN_RESULT); return peer;
     }
     private ExamWarningStatus episode(Peer peer, Long round, long millis, boolean duplicate) throws Exception {

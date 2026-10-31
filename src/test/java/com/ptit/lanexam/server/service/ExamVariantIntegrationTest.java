@@ -111,10 +111,20 @@ class ExamVariantIntegrationTest {
             String title = dto.getTitle(); counts.merge(title, 1L, Long::sum);
             String old = layouts.putIfAbsent(title, snapshot(dto)); if (old != null) assertEquals(old, snapshot(dto));
             assertEquals(ids, dto.getQuestions().stream().map(QuestionDto::getId).collect(Collectors.toSet()));
+            var levels = dto.getQuestions().stream().map(q -> Integer.parseInt(q.getContent().split(" ")[2])).toList();
+            assertEquals(List.of(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6), levels,
+                    "Every code must preserve the same difficulty blocks and question counts");
             assertEquals(snapshot(dto), snapshot(reopened().startAttempt(code, round.getId()).orElseThrow()));
             assertEquals(dto.getDeadlineEpochMillis(), round.getDeadlineEpochMillis());
         }
         assertEquals(4, counts.size()); assertTrue(counts.values().stream().allMatch(n -> n == 15));
+        var progress = reopened().roundProgress(classId, null).orElseThrow();
+        assertEquals(60, progress.variantCodes().size());
+        assertTrue(progress.variantCodes().values().stream().allMatch(code -> code.matches("10[1-4]")));
+        for (int i = 1; i <= 60; i++) {
+            String code = "SV%03d".formatted(i);
+            assertTrue(reopened().getOpenAttempt(code).orElseThrow().getTitle().endsWith(progress.variantCode(code)));
+        }
         assertEquals(4, new HashSet<>(layouts.values()).size());
         assertEquals(round.getId(), reopened().activateExam(templateId, classId, null, 4).getId());
         assertThrows(IllegalStateException.class, () -> exams.activateExam(templateId, classId, null, 3));
@@ -177,6 +187,9 @@ class ExamVariantIntegrationTest {
     @Test void singleCodeRoundFreezesRosterAndRestoresItWithoutChangingDeadlineOrAnswers() {
         var prepared = classes.roster(classId);
         var round = exams.activateExam(templateId, classId, null, 1, prepared);
+        var codes = exams.roundProgress(classId, null).orElseThrow();
+        assertEquals(60, codes.variantCodes().size());
+        assertTrue(codes.variantCodes().values().stream().allMatch("Gốc"::equals));
         var first = exams.startAttempt("SV001", round.getId()).orElseThrow();
         exams.updateAnswers("SV001", new SubmitExamRequest(round.getId(), correct(first)));
         classes.importRoster(classId, RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n999,SV999,Sinh viên bổ sung,07/11/2005,C1"));
@@ -184,6 +197,7 @@ class ExamVariantIntegrationTest {
         assertEquals(61, classes.roster(classId).size());
         assertEquals(prepared, restored.rosterForRound(round.getId()));
         assertTrue(restored.findOffer("SV999", round.getId()).isEmpty());
+        assertEquals("—", restored.roundProgress(classId, null).orElseThrow().variantCode("SV999"));
         assertThrows(IllegalArgumentException.class, () -> restored.startAttempt("SV999", round.getId()));
         assertEquals(round.getId(), restored.recoverPublishedExam().orElseThrow().getId());
         var resume = restored.startAttempt("SV001", round.getId()).orElseThrow();
@@ -230,6 +244,61 @@ class ExamVariantIntegrationTest {
             for (var q : dto.getQuestions()) assertEquals(List.of("A. Nhận định thứ nhất", "B. Nhận định thứ hai", "C. Nhận định thứ ba", "D. Cả A và B"), q.getOptions());
         }
         assertEquals(4, layouts.size());
+    }
+    @Test void protectedChoicesCannotBeShuffledAcrossDifficultyBlocksToMakeExtraCodes() {
+        List<Long> ids = new ArrayList<>();
+        for (int level : List.of(6, 2, 4)) ids.add(bank.createQuestion(new BankQuestionDraft(subjectId, level,
+                new ExamDraft.QuestionDraft("Câu riêng mức " + level, QuestionType.MULTIPLE_CHOICE,
+                        "One", "Two", "Three", "All of the above", "D"))).id());
+        Long template = exams.createExamFromBank(new BankExamDraft("Protected levels", 1, subjectId, ids)).id();
+        var error = assertThrows(IllegalArgumentException.class, () -> exams.activateExam(template, classId, null, 2));
+        assertTrue(error.getMessage().contains("1 mã"));
+        assertThrows(IllegalStateException.class, exams::getActiveExam);
+        var single = exams.activateExam(template, classId, null, 1);
+        assertEquals(List.of("Câu riêng mức 2", "Câu riêng mức 4", "Câu riêng mức 6"), single.getQuestions().stream().map(QuestionDto::getContent).toList());
+    }
+    @Test void bankEditsCannotChangeDifficultyBlocksOfAnExistingTemplateOrRound() {
+        List<Long> selected = bank.drawQuestions(subjectId, matrix, Set.of()).stream().map(BankQuestionInfo::id).toList();
+        List<Long> backwards = new ArrayList<>(selected); Collections.reverse(backwards);
+        Long template = exams.createExamFromBank(new BankExamDraft("Snapshot levels", 1, subjectId, backwards)).id();
+        var source = bank.listQuestions(subjectId, 1).stream().filter(q -> selected.contains(q.id())).findFirst().orElseThrow();
+        bank.updateQuestion(source.id(), new BankQuestionDraft(subjectId, 6, new ExamDraft.QuestionDraft(
+                source.content(), QuestionType.MULTIPLE_CHOICE, source.optionA(), source.optionB(), source.optionC(), source.optionD(), "A")));
+        var round = exams.activateExam(template, classId, null, 8);
+        List<Integer> expected = List.of(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6);
+        try (var em = factory.createEntityManager()) {
+            assertEquals(expected, em.find(Exam.class, round.getId()).getQuestions().stream().map(Question::getDifficulty).toList());
+        }
+        Map<String, String> saved = new HashMap<>();
+        for (int index = 1; index <= 60 && saved.size() < 8; index++) {
+            String code = "SV%03d".formatted(index); var attempt = exams.startAttempt(code, round.getId()).orElseThrow();
+            if (saved.putIfAbsent(attempt.getTitle(), snapshot(attempt)) != null) continue;
+            assertEquals(expected, attempt.getQuestions().stream().map(q -> Integer.parseInt(q.getContent().split(" ")[2])).toList());
+            assertEquals(snapshot(attempt), snapshot(reopened().getOpenAttempt(code).orElseThrow()));
+            assertEquals(10.0, exams.submit(code, new SubmitExamRequest(round.getId(), correct(attempt))).getScore());
+        }
+        assertEquals(8, saved.size());
+    }
+    @Test void legacyQuestionsWithoutDifficultyStayInASeparateFinalBlock() {
+        var round = exams.activateExam(templateId, classId, null, 1);
+        // Emulate an old template whose snapshot metadata was only partially available.
+        clock.now = clock.now.plusSeconds(61);
+        try (var em = factory.createEntityManager()) {
+            em.getTransaction().begin();
+            var template = em.find(Exam.class, templateId);
+            Long missing = template.getQuestions().getFirst().getId();
+            em.createQuery("update Question q set q.difficulty = null where q.id = :id").setParameter("id", missing).executeUpdate();
+            em.getTransaction().commit();
+        }
+        var next = exams.activateExam(templateId, classId, null, 4);
+        String missingContent = round.getQuestions().getFirst().getContent();
+        for (int index = 1; index <= 5; index++) {
+            var dto = exams.startAttempt("SV%03d".formatted(index), next.getId()).orElseThrow();
+            assertEquals(missingContent, dto.getQuestions().getLast().getContent());
+            var known = dto.getQuestions().subList(0, dto.getQuestions().size() - 1).stream()
+                    .map(q -> Integer.parseInt(q.getContent().split(" ")[2])).toList();
+            assertEquals(known.stream().sorted().toList(), known);
+        }
     }
     @Test void reportsWhenProtectedOptionsLeaveTooFewDistinctLayoutsAndRollsBackRound() {
         var q = bank.createQuestion(new BankQuestionDraft(subjectId, 1,

@@ -148,6 +148,8 @@ public class ExamService {
                     throw new IllegalArgumentException("Chỉ chọn câu trắc nghiệm để tạo đề.");
                 exam.addQuestion(Question.fromBank(source));
             }
+            exam.getQuestions().sort(java.util.Comparator.comparing(Question::getDifficulty,
+                    java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())));
             em.persist(exam);
             em.flush();
             ExamSummary result = new ExamSummary(exam.getId(), exam.getTitle(), exam.getDurationMinutes(),
@@ -208,11 +210,12 @@ public class ExamService {
         }
     }
 
-    public record RoundProgress(Long roundId, Instant deadline, Map<String, String> states) {
-        public RoundProgress { states = Map.copyOf(states); }
+    public record RoundProgress(Long roundId, Instant deadline, Map<String, String> states, Map<String, String> variantCodes) {
+        public RoundProgress { states = Map.copyOf(states); variantCodes = Map.copyOf(variantCodes); }
+        public String variantCode(String code) { return variantCodes.getOrDefault(code, "—"); }
         public String state(String code, Instant now) {
             String saved = states.get(code);
-            if ("Đã nộp".equals(saved)) return saved;
+            if ("Đã nộp".equals(saved) || "Vi phạm quy chế".equals(saved)) return saved;
             if (!now.isBefore(deadline)) return saved == null ? "Vắng thi" : "Đang chấm";
             return saved == null ? "Chưa vào bài" : "Đang làm";
         }
@@ -230,11 +233,19 @@ public class ExamService {
             Exam round = query.getResultStream().findFirst().orElse(null);
             if (round == null || round.getDeadlineAt() == null) return Optional.empty();
             Map<String, String> states = new java.util.HashMap<>();
-            em.createQuery("select a.student.studentCode, a.submittedAt from ExamAttempt a where a.exam = :exam", Object[].class)
-                    .setParameter("exam", round).getResultList().forEach(row -> states.put((String) row[0], row[1] == null ? "Đang làm" : "Đã nộp"));
-            em.createQuery("select s.student.studentCode from Submission s where s.exam = :exam", String.class)
-                    .setParameter("exam", round).getResultList().forEach(code -> states.put(code, "Đã nộp"));
-            return Optional.of(new RoundProgress(round.getId(), round.getDeadlineAt(), states));
+            em.createQuery("select a.student.studentCode, a.submittedAt, a.disqualificationReason from ExamAttempt a where a.exam = :exam", Object[].class)
+                    .setParameter("exam", round).getResultList().forEach(row -> states.put((String) row[0], row[2] != null ? "Vi phạm quy chế" : row[1] == null ? "Đang làm" : "Đã nộp"));
+            em.createQuery("select s.student.studentCode, s.disqualificationReason from Submission s where s.exam = :exam", Object[].class)
+                    .setParameter("exam", round).getResultList().forEach(row -> states.put((String) row[0], row[1] != null ? "Vi phạm quy chế" : "Đã nộp"));
+            var bundle = ExamVariants.read(round);
+            Map<String, String> variantCodes = new java.util.HashMap<>();
+            if (bundle != null) variantCodes.putAll(bundle.assignments());
+            else {
+                var candidates = RoundRoster.read(round);
+                if (candidates == null) candidates = RoundRoster.candidates(em, round.getCourseClass(), round.getShift());
+                candidates.forEach(student -> variantCodes.put(student.code(), "Gốc"));
+            }
+            return Optional.of(new RoundProgress(round.getId(), round.getDeadlineAt(), states, variantCodes));
         }
     }
 
@@ -361,7 +372,7 @@ public class ExamService {
             round.setCourseClass(courseClass);
             round.setShift(shift);
             if (courseClass != null) round.setRosterJson(RoundRoster.write(candidates));
-            for (Question question : template.getQuestions())
+            for (Question question : ExamVariants.orderedQuestions(template))
                 round.addQuestion(question.copyForRound());
             em.persist(round);
             em.flush();
@@ -393,7 +404,7 @@ public class ExamService {
                             classId == null ? resultTitle(s.getExam()) : displayTitle(s.getExam()), s.getScore(),
                             (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
                             s.getAnswers().size(), s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId(), s.getVariantCode(),
-                            s.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED))
+                            s.isDisqualified() ? ExamResultRow.Status.DISQUALIFIED : s.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED).withReason(s.getDisqualificationReason()))
                     .toList();
         } finally {
             em.close();
@@ -422,7 +433,8 @@ public class ExamService {
                 for (var student : roster) {
                     Submission submission = submitted.remove(new Key(round.getId(), student.code()));
                     ExamAttempt attempt = attempts.get(new Key(round.getId(), student.code()));
-                    ExamResultRow.Status state = submission != null
+                    ExamResultRow.Status state = submission != null && submission.isDisqualified() || attempt != null && attempt.getDisqualificationReason() != null
+                            ? ExamResultRow.Status.DISQUALIFIED : submission != null
                             ? submission.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED
                             : round.getDeadlineAt() != null && !now.isBefore(round.getDeadlineAt())
                             ? attempt == null ? ExamResultRow.Status.ABSENT : ExamResultRow.Status.GRADING
@@ -432,13 +444,14 @@ public class ExamService {
                             submission == null ? null : (int) submission.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
                             round.getQuestions().size(), submission == null ? null : submission.getSubmittedAt(),
                             round.getCourseClass() == null ? null : round.getCourseClass().getId(),
-                            submission == null ? ExamVariants.code(round, student.code()) : submission.getVariantCode(), state));
+                            submission == null ? ExamVariants.code(round, student.code()) : submission.getVariantCode(), state)
+                            .withReason(submission != null ? submission.getDisqualificationReason() : attempt == null ? null : attempt.getDisqualificationReason()));
                 }
             }
             for (Submission s : submitted.values()) rows.add(new ExamResultRow(s.getExam().getId(), s.getStudent().getStudentCode(), s.getStudent().getFullName(),
                     resultTitle(s.getExam()), s.getScore(), (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(), s.getAnswers().size(),
                     s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId(), s.getVariantCode(),
-                    s.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED));
+                    s.isDisqualified() ? ExamResultRow.Status.DISQUALIFIED : s.isAutomaticSubmission() ? ExamResultRow.Status.EXPIRED : ExamResultRow.Status.SUBMITTED).withReason(s.getDisqualificationReason()));
             return List.copyOf(rows);
         }
     }
@@ -450,7 +463,7 @@ public class ExamService {
                             + "and " + scope.predicate("s.exam") + " "
                             + "order by s.submittedAt desc", Submission.class)
                     .setParameter("code", studentCode).getResultList().stream()
-                    .map(s -> new ExamHistoryItem(s.getExam().getId(), ExamVariants.title(displayTitle(s.getExam()), s.getVariantCode()), s.getScore(),
+                    .map(s -> new ExamHistoryItem(s.getExam().getId(), ExamVariants.title(displayTitle(s.getExam()), s.getVariantCode()) + (s.isDisqualified() ? " · Vi phạm quy chế" : ""), s.getScore(),
                             (int) s.getAnswers().stream().filter(StudentAnswer::isCorrect).count(),
                             s.getAnswers().size(), s.getSubmittedAt(), s.getExam().getCourseClass() == null ? null : s.getExam().getCourseClass().getId()))
                     .toList();
@@ -680,6 +693,38 @@ public class ExamService {
         }
     }
 
+    public boolean canDisqualify(Long roundId, String code) {
+        try (var em = entityManagers.get()) {
+            Exam round = em.find(Exam.class, roundId); scope.require(round);
+            return round.getDeadlineAt() != null && round.isActive() && clock.instant().isBefore(round.getDeadlineAt())
+                    && em.createQuery("select count(a) from ExamAttempt a where a.exam = :round and a.student.studentCode = :code and a.submittedAt is null and a.disqualificationReason is null and a.deadlineAt > :now", Long.class)
+                    .setParameter("round", round).setParameter("code", code).setParameter("now", clock.instant()).getSingleResult() > 0;
+        }
+    }
+
+    /** Cut off this student's attempt. Timely queued answers drain before its zero-point submission is finalized. */
+    public boolean disqualify(Long roundId, String code, String reason) {
+        if (reason == null || reason.isBlank() || reason.strip().length() > 1000)
+            throw new IllegalArgumentException("Nhập lý do đình chỉ từ 1–1.000 ký tự.");
+        try (var em = entityManagers.get()) {
+            var tx = em.getTransaction();
+            try {
+                tx.begin();
+                Exam round = em.find(Exam.class, roundId); scope.require(round);
+                ExamAttempt attempt = findAttempt(em, code, roundId, LockModeType.PESSIMISTIC_WRITE)
+                        .orElseThrow(() -> new IllegalArgumentException("Sinh viên chưa vào bài thi này."));
+                if (attempt.getDisqualificationReason() != null) { tx.commit(); return false; }
+                if (!round.isActive() || round.getDeadlineAt() == null || !clock.instant().isBefore(round.getDeadlineAt())
+                        || !attempt.isOpenAt(clock.instant()) || findSubmission(em, attempt).isPresent())
+                    throw new IllegalStateException("Bài đã nộp hoặc ca đã kết thúc, không thể đình chỉ.");
+                attempt.disqualify(clock.instant(), reason.strip());
+                events.recordDisqualification(em, attempt, reason.strip());
+                tx.commit();
+                return true;
+            } catch (RuntimeException ex) { if (tx.isActive()) tx.rollback(); throw ex; }
+        }
+    }
+
     public void finalizeExpiredAttempts() {
         EntityManager em = entityManagers.get();
         List<Long> ids;
@@ -723,6 +768,7 @@ public class ExamService {
         Submission submission = new Submission(attempt.getStudent(), exam, 0, LocalDateTime.ofInstant(clock.instant(), java.time.ZoneId.systemDefault()));
         submission.setVariantCode(attempt.getVariantCode());
         submission.setAutomaticSubmission(automatic);
+        submission.setDisqualificationReason(attempt.getDisqualificationReason());
         var variant = ExamVariants.variant(attempt);
         for (Question question : exam.getQuestions()) {
             String answer = answers.get(question.getId());
@@ -732,11 +778,11 @@ public class ExamService {
         }
         int total = exam.getQuestions().size();
         double score = total == 0 ? 0 : Math.round(correct * 1000.0 / total) / 100.0;
-        submission.setScore(score);
+        submission.setScore(submission.isDisqualified() ? 0 : score);
         em.persist(submission);
         attempt.markSubmitted(clock.instant());
         attempt.setSavedAnswersJson(null);
-        return new SubmitResult(score, correct, total, "Nộp bài thành công");
+        return submission.isDisqualified() ? toResult(submission) : new SubmitResult(score, correct, total, "Nộp bài thành công");
     }
 
     private Optional<Submission> findSubmission(EntityManager em, ExamAttempt attempt) {
@@ -747,7 +793,8 @@ public class ExamService {
 
     private SubmitResult toResult(Submission submission) {
         int correct = (int) submission.getAnswers().stream().filter(StudentAnswer::isCorrect).count();
-        return new SubmitResult(submission.getScore(), correct, submission.getAnswers().size(), "Bài đã được nộp");
+        return new SubmitResult(submission.getScore(), correct, submission.getAnswers().size(),
+                submission.isDisqualified() ? "Vi phạm quy chế — bài thi bị đình chỉ. Lý do: " + submission.getDisqualificationReason() : "Bài đã được nộp");
     }
 
     private static String resultTitle(Exam exam) {

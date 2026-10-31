@@ -256,30 +256,52 @@ class ExamWorkflowUiTest {
                 assertEquals("Offline", fx(() -> progressCell(stage, 1, "Kết nối")));
                 assertEquals("Đang làm", fx(() -> progressCell(stage, 1, "Bài thi của ca này")));
                 assertEquals("Chưa vào bài", fx(() -> progressCell(stage, 2, "Bài thi của ca này")));
+                var codes = exams.roundProgress(a.id(), shifts.list(a.id()).getFirst().id()).orElseThrow();
+                for (int index = 0; index < 3; index++) {
+                    int row = index; String code = "ST%03d".formatted(index + 1);
+                    assertEquals(codes.variantCode(code), fx(() -> progressCell(stage, row, "Mã đề")));
+                    assertTrue(codes.variantCode(code).matches("10[1-4]"));
+                }
                 for (int index = 0; index < 3; index++) exams.events().focusReturned(round.getId(), "ST002", UUID.randomUUID().toString(),
                         Instant.now().minusSeconds(4), Instant.now());
                 awaitFx(() -> progressCell(stage, 1, "Cảnh báo").contains("3 lần") && progressCell(stage, 1, "Cảnh báo").contains("Cần kiểm tra"));
-                Platform.runLater(() -> {
-                    var table = (TableView<?>) stage.getScene().lookup("#exam-roster");
-                    table.applyCss(); table.layout();
-                    table.lookupAll(".hyperlink").stream().filter(node -> ((Hyperlink) node).getText().contains("Cần kiểm tra"))
-                            .map(node -> (Hyperlink) node).findFirst().orElseThrow().fire();
+                fx(() -> { ((Button) stage.getScene().lookup("#nav-bank")).fire(); return null; });
+                awaitFx(() -> ((Button) stage.getScene().lookup("#teacher-notifications")).getText().endsWith("1")
+                        && stage.getScene().lookup("#teacher-notification-toast").isVisible());
+                fx(() -> {
+                    assertTrue(((Label) stage.getScene().lookup("#teacher-notification-text")).getText().contains("ST002"));
+                    ((Button) stage.getScene().lookup("#teacher-notifications")).fire(); return null;
                 });
+                awaitFx(() -> notificationCenter() != null && ((TableView<?>) notificationCenter().lookup("#teacher-notification-list")).getItems().size() == 1);
+                fx(() -> {
+                    var table = (TableView<?>) notificationCenter().lookup("#teacher-notification-list");
+                    table.getSelectionModel().selectFirst(); snapshot(notificationCenter(), "teacher-notification-center"); return null;
+                });
+                Platform.runLater(() -> ((Button) notificationCenter().lookup("#teacher-notification-open")).fire());
                 awaitFx(() -> notice("#exam-warning-journal") != null
                         && ((TableView<?>) notice("#exam-warning-journal").lookup("#warning-journal-events")).getItems().size() == 3);
                 fx(() -> {
                     assertTrue(notice("#exam-warning-journal").lookup("#warning-journal-remind").isDisabled(), "Offline students cannot receive a reminder");
+                    assertFalse(notice("#exam-warning-journal").lookup("#warning-journal-disqualify").isDisabled(), "An offline active attempt can be disqualified");
                     snapshot(notice("#exam-warning-journal"), "exam-warning-journal");
                     ((Button) notice("#exam-warning-journal").lookup("#warning-journal-review")).fire(); return null;
                 });
                 awaitFx(() -> !((Label) notice("#exam-warning-journal").lookup("#warning-journal-state")).getText().contains("Cần kiểm tra"));
                 fx(() -> { ((Button) notice("#exam-warning-journal").lookupButton(ButtonType.CLOSE)).fire(); return null; });
+                awaitFx(() -> ((TableView<?>) notificationCenter().lookup("#teacher-notification-list")).getItems().isEmpty()
+                        && ((Button) stage.getScene().lookup("#teacher-notifications")).getText().endsWith("0"));
+                fx(() -> {
+                    ((Stage) notificationCenter().getScene().getWindow()).close();
+                    ((Button) stage.getScene().lookup("#nav-room")).fire(); return null;
+                });
                 awaitFx(() -> !progressCell(stage, 1, "Cảnh báo").contains("Cần kiểm tra"));
                 selectProgressClass(stage, b.id());
                 assertEquals("Chưa mở thi", fx(() -> progressCell(stage, 0, "Bài thi của ca này")));
+                assertEquals("—", fx(() -> progressCell(stage, 0, "Mã đề")));
                 assertEquals("0 lần", fx(() -> progressCell(stage, 1, "Cảnh báo")));
                 selectProgressClass(stage, a.id());
                 assertEquals("Đã nộp", fx(() -> progressCell(stage, 0, "Bài thi của ca này")));
+                assertEquals(codes.variantCode("ST001"), fx(() -> progressCell(stage, 0, "Mã đề")));
                 peer.close();
                 awaitFx(() -> progressCell(stage, 0, "Kết nối").equals("Offline"));
                 assertEquals("Đã nộp", fx(() -> progressCell(stage, 0, "Bài thi của ca này")));
@@ -293,9 +315,73 @@ class ExamWorkflowUiTest {
                 }
                 awaitFx(() -> progressCell(stage, 1, "Bài thi của ca này").equals("Đã nộp")
                         && progressCell(stage, 2, "Bài thi của ca này").equals("Vắng thi"));
+                assertEquals(codes.variantCode("ST003"), fx(() -> progressCell(stage, 2, "Mã đề")));
                 fx(() -> { snapshot(stage.getScene().getRoot(), "recovered-round-progress.png"); return null; });
             } finally { peer.close(); fx(() -> { app.stop(); stage.close(); return null; }); }
         }
+    }
+
+    @Test void groupedNotificationsAndConfirmedDisqualificationEndTheClientAndPreserveTheReason() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver", "jakarta.persistence.jdbc.url", "jdbc:h2:mem:discipline_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "", "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gvdiscipline", "Giảng viên", "Matkhau123!");
+            var bank = new QuestionBankService(factory::createEntityManager, teacher.id()); var subject = bank.createSubject("LTM");
+            var classes = new ClassService(factory::createEntityManager, teacher.id()); var group = classes.create("A", "Nhóm A", "HK1", subject.id());
+            classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,ST001,An,12/05/2003,C1\n2,ST002,Bình,12/05/2003,C1"));
+            var exams = new ExamService(factory::createEntityManager, teacher.id());
+            var question = bank.createQuestion(new BankQuestionDraft(subject.id(), 1, new ExamDraft.QuestionDraft("Chọn TCP", QuestionType.MULTIPLE_CHOICE, "TCP", "UDP", "IP", "ICMP", "A")));
+            var template = exams.createExamFromBank(new BankExamDraft("Đề", 20, subject.id(), List.of(question.id())));
+            var round = exams.activateExam(template.id(), group.id());
+            for (String code : List.of("ST001", "ST002")) {
+                exams.startAttempt(code, round.getId());
+                for (int i = 0; i < 3; i++) exams.events().focusReturned(round.getId(), code, UUID.randomUUID().toString(), Instant.now().minusSeconds(4), Instant.now());
+            }
+            var app = new ServerApp(factory::createEntityManager, () -> {}, 0); var client = new ClientApp();
+            Stage teacherStage = fx(() -> { var stage = new Stage(); app.start(stage); return stage; }); Stage[] student = new Stage[1];
+            try {
+                awaitFx(() -> teacherStage.getScene().lookup("#teacher-login-submit") != null); loginTeacherInUi(teacherStage, "gvdiscipline");
+                awaitFx(() -> ((Button) teacherStage.getScene().lookup("#teacher-notifications")).getText().endsWith("2"));
+                fx(() -> { assertTrue(((Label) teacherStage.getScene().lookup("#teacher-notification-text")).getText().contains("2 sinh viên")); return null; });
+                student[0] = fx(() -> {
+                    var stage = new Stage(); client.start(stage);
+                    ((TextField) stage.getScene().lookup("#login-port")).setText(Integer.toString(app.getListeningPort()));
+                    ((TextField) stage.getScene().lookup("#login-code")).setText("ST001");
+                    ((DatePicker) stage.getScene().lookup("#login-birth-date")).setValue(LocalDate.of(2003, 5, 12));
+                    ((Button) stage.getScene().lookup("#login-connect")).fire(); return stage;
+                });
+                awaitFx(() -> student[0].getScene().lookup("#join-exam") instanceof Button button && !button.isDisabled());
+                fx(() -> { ((Button) student[0].getScene().lookup("#join-exam")).fire(); return null; });
+                awaitFx(() -> student[0].getScene().lookup("#exam-submit") != null);
+                fx(() -> { ((Button) teacherStage.getScene().lookup("#exam-prepare")).fire(); return null; });
+                awaitFx(() -> teacherStage.getScene().lookup("#exam-roster") instanceof TableView<?> table && table.getItems().size() == 2);
+                Platform.runLater(() -> {
+                    var table = (TableView<?>) teacherStage.getScene().lookup("#exam-roster"); table.applyCss(); table.layout();
+                    table.lookupAll(".table-row-cell").stream().map(node -> (TableRow<?>) node).filter(row -> row.getIndex() == 0 && !row.isEmpty())
+                            .findFirst().orElseThrow().lookupAll(".hyperlink").stream().map(node -> (Hyperlink) node).findFirst().orElseThrow().fire();
+                });
+                awaitFx(() -> notice("#exam-warning-journal") != null && !notice("#exam-warning-journal").lookup("#warning-journal-disqualify").isDisabled());
+                requestUiDisqualification("Sử dụng tài liệu");
+                fx(() -> { ((Button) notice("#exam-disqualification-confirmation").lookupButton(ButtonType.CANCEL)).fire(); return null; });
+                assertTrue(exams.getExamResult("ST001", round.getId()).isEmpty());
+                requestUiDisqualification("Sử dụng tài liệu");
+                fx(() -> { ((Button) notice("#exam-disqualification-confirmation").lookupButton(ButtonType.OK)).fire(); return null; });
+                awaitFx(() -> student[0].getScene().getRoot().lookupAll(".label").stream().anyMatch(node -> node instanceof Label label && label.getText().equals("Vi phạm quy chế")));
+                assertEquals(0.0, exams.getExamResult("ST001", round.getId()).orElseThrow().getScore());
+                fx(() -> {
+                    assertNull(student[0].getScene().lookup("#exam-submit")); snapshot(student[0].getScene().getRoot(), "student-disqualified-result");
+                    ((Button) notice("#exam-warning-journal").lookupButton(ButtonType.CLOSE)).fire(); return null;
+                });
+                awaitFx(() -> ((Button) teacherStage.getScene().lookup("#teacher-notifications")).getText().endsWith("1"));
+            } finally { fx(() -> { client.stop(); if (student[0] != null) student[0].close(); app.stop(); teacherStage.close(); return null; }); }
+        }
+    }
+    private static void requestUiDisqualification(String reason) throws Exception {
+        Platform.runLater(() -> ((Button) notice("#exam-warning-journal").lookup("#warning-journal-disqualify")).fire());
+        awaitFx(() -> notice("#exam-disqualification-reason") != null);
+        fx(() -> { ((TextField) notice("#exam-disqualification-reason").lookup(".text-field")).setText(reason);
+            ((Button) notice("#exam-disqualification-reason").lookupButton(ButtonType.OK)).fire(); return null; });
+        awaitFx(() -> notice("#exam-disqualification-confirmation") != null);
     }
 
     @Test void focusMonitorIgnoresOwnedDialogsAndStopsAfterTheAttempt() throws Exception {
@@ -350,7 +436,7 @@ class ExamWorkflowUiTest {
     }
 
     @Test
-    void clickingStudentNameEditsSharedProfileWithExplicitConfirmation() throws Exception {
+    void rosterIsReadOnlyAndSixtyExistingStudentsWithOneCsvDifferenceCanJoinAnotherClass() throws Exception {
         try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
                 "jakarta.persistence.jdbc.driver", "org.h2.Driver",
                 "jakarta.persistence.jdbc.url", "jdbc:h2:mem:profile_ui_" + UUID.randomUUID() + ";MODE=MySQL",
@@ -359,42 +445,50 @@ class ExamWorkflowUiTest {
             var bank = new QuestionBankService(factory::createEntityManager);
             var classes = new ClassService(factory::createEntityManager, null);
             var group = classes.create("PROFILE", "Nhóm thử", "HK1", bank.createSubject("Mạng").id());
-            classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n9,EDIT001,Nguyễn An,12/05/2003,C1"));
+            var source = RosterCsv.read(Path.of("src/test/resources/fixtures/student-roster-60.csv"));
+            classes.importRoster(group.id(), source);
+            var next = classes.create("NEXT", "Lớp mới", "HK1", bank.listSubjects().getFirst().id());
+            var incoming = new java.util.ArrayList<>(source);
+            var first = source.getFirst();
+            incoming.set(0, new RosterCsv.StudentRow(first.line(), first.code(), "Tên trên CSV đã khác", first.birthDate().plusDays(1), "KHAC", first.ordinal()));
+            var preview = classes.preview(next.id(), incoming);
+            assertEquals(60, preview.count(ClassService.ImportStatus.ENROLL)); assertEquals(1, preview.profileDifferences());
             ClassManager[] view = new ClassManager[1];
             Stage stage = fx(() -> {
                 var s = new Stage(); view[0] = new ClassManager(s, classes, bank, FXCollections.observableArrayList(), () -> {});
                 s.setScene(com.ptit.lanexam.common.ui.AppUi.scene(view[0], 1100, 680)); s.show(); return s;
             });
             try {
-                awaitFx(() -> stage.getScene().lookup("#class-roster") instanceof TableView<?> table && table.getItems().size() == 1);
+                awaitFx(() -> stage.getScene().lookup("#class-selector") instanceof ComboBox<?> box && box.getItems().size() == 2);
+                fx(() -> {
+                    ((ComboBox<com.ptit.lanexam.server.service.ClassInfo>) stage.getScene().lookup("#class-selector")).setValue(group); return null;
+                });
+                awaitFx(() -> ((TableView<?>) stage.getScene().lookup("#class-roster")).getItems().size() == 60);
                 fx(() -> {
                     stage.getScene().getRoot().applyCss(); stage.getScene().getRoot().layout();
-                    Hyperlink name = (Hyperlink) stage.getScene().lookup("#class-roster").lookupAll(".hyperlink").stream()
-                            .filter(n -> n instanceof Hyperlink link && link.getText().equals("Nguyễn An")).findFirst().orElseThrow();
-                    Platform.runLater(name::fire); return null;
+                    var roster = (TableView<?>) stage.getScene().lookup("#class-roster");
+                    assertFalse(roster.isEditable()); assertTrue(roster.lookupAll(".hyperlink").isEmpty());
+                    assertNull(notice("#student-profile-editor"));
+                    ((ComboBox<com.ptit.lanexam.server.service.ClassInfo>) stage.getScene().lookup("#class-selector")).setValue(next); return null;
                 });
-                awaitFx(() -> notice("#student-profile-editor") != null);
+                Platform.runLater(() -> view[0].showPreview(next, preview));
+                awaitFx(() -> notice("#class-import-preview") != null);
                 fx(() -> {
-                    var pane = notice("#student-profile-editor");
-                    assertFalse(((TextField) pane.lookup("#student-profile-code")).isEditable());
-                    assertTrue(pane.lookup("#student-profile-save").isDisabled());
-                    ((TextField) pane.lookup("#student-profile-name")).setText(" ");
-                    ((CheckBox) pane.lookup("#student-profile-confirm")).setSelected(true);
-                    ((Button) pane.lookup("#student-profile-save")).fire(); return null;
+                    var pane = notice("#class-import-preview"); var table = (TableView<?>) pane.lookup(".table-view");
+                    assertEquals(first.fullName(), table.getColumns().get(2).getCellData(0));
+                    assertEquals(RosterCsv.displayDate(first.birthDate()), table.getColumns().get(3).getCellData(0));
+                    assertEquals(first.regularClass(), table.getColumns().get(4).getCellData(0));
+                    assertTrue(table.getColumns().get(5).getCellData(0).toString().contains("Giữ hồ sơ"));
+                    assertFalse(pane.lookup("#class-import-confirm").isDisabled());
+                    snapshot(pane, "csv-reuse-existing-profile");
+                    ((Button) pane.lookup("#class-import-confirm")).fire(); return null;
                 });
-                awaitFx(() -> !((Label) notice("#student-profile-editor").lookup("#student-profile-error")).getText().isBlank());
-                fx(() -> {
-                    var pane = notice("#student-profile-editor");
-                    ((TextField) pane.lookup("#student-profile-name")).setText("Nguyễn Văn An");
-                    ((DatePicker) pane.lookup("#student-profile-birth")).setValue(LocalDate.of(2003, 5, 17));
-                    ((TextField) pane.lookup("#student-profile-regular-class")).setText("C2");
-                    ((Button) pane.lookup("#student-profile-save")).fire(); return null;
-                });
-                awaitFx(() -> notice("#student-profile-editor") == null
-                        && ((TableView<?>) stage.getScene().lookup("#class-roster")).getItems().size() == 1
-                        && "Nguyễn Văn An".equals(((TableView<?>) stage.getScene().lookup("#class-roster")).getColumns().get(2).getCellData(0)));
-                assertEquals(9, classes.roster(group.id()).getFirst().ordinal());
-                assertTrue(new AuthService(factory::createEntityManager).authenticate("EDIT001", "2003-05-17").isPresent());
+                awaitFx(() -> notice("#class-import-preview") == null && ((TableView<?>) stage.getScene().lookup("#class-roster")).getItems().size() == 60);
+                assertEquals(classes.roster(group.id()), classes.roster(next.id()));
+                var auth = new AuthService(factory::createEntityManager);
+                assertTrue(auth.authenticate(first.code(), first.birthDate().toString()).isPresent());
+                assertTrue(auth.authenticate(first.code(), first.birthDate().plusDays(1).toString()).isEmpty());
+                try (var em = factory.createEntityManager()) { assertEquals(60L, em.createQuery("select count(s) from Student s", Long.class).getSingleResult()); }
             } finally { fx(() -> { view[0].dispose(); stage.close(); return null; }); }
         }
     }
@@ -770,6 +864,7 @@ class ExamWorkflowUiTest {
                         && ((TableView<?>) stage.getScene().lookup("#exam-roster")).getItems().size() == 2);
                 fx(() -> { assertTrue(stage.getScene().lookup("#exam-start").isDisabled()); return null; });
                 assertTrue(exams.findOffer("FR003", exams.getActiveExam().getId()).isEmpty());
+                awaitFx(() -> progressCell(stage, 0, "Mã đề").equals("Gốc"));
                 fx(() -> { ((Button) stage.getScene().lookup("#nav-results")).fire(); return null; });
                 awaitFx(() -> stage.getScene().lookup("#teacher-results") instanceof TableView<?> table && table.getItems().size() == 2
                         && !stage.getScene().lookup("#results-refresh").isDisabled());
@@ -790,6 +885,13 @@ class ExamWorkflowUiTest {
                     assertEquals("", table.getColumns().stream().filter(c -> c.getText().equals("Nộp lúc")).findFirst().orElseThrow().getCellData(0));
                     assertFalse(stage.getScene().lookup("#results-export").isDisabled()); return null;
                 });
+                fx(() -> {
+                    ((Button) stage.getScene().lookup("#nav-room")).fire();
+                    ((Button) stage.getScene().lookup("#exam-prepare")).fire(); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled()
+                        && ((TableView<?>) stage.getScene().lookup("#exam-roster")).getItems().size() == 3);
+                assertEquals("—", fx(() -> progressCell(stage, 0, "Mã đề")), "New preparation must not show the previous round's code");
             } finally { fx(() -> { app.stop(); stage.close(); return null; }); }
         }
     }
@@ -986,7 +1088,8 @@ class ExamWorkflowUiTest {
             assertEquals(3, selectedTable(dialog).getItems().size());
             selectedTable(dialog).getSelectionModel().clearAndSelect(1);
             ((Button) dialog.getDialogPane().lookup("#exam-move-up")).fire();
-            assertEquals(102L, selectedTable(dialog).getItems().getFirst().id());
+            assertEquals(List.of(1, 3, 6), selectedTable(dialog).getItems().stream().map(BankQuestionInfo::difficulty).toList());
+            assertEquals(101L, selectedTable(dialog).getItems().getFirst().id(), "Không chuyển câu sang mức độ khó khác.");
             ((TextField) dialog.getDialogPane().lookup("#exam-title")).setText("Kiểm tra Lập trình mạng");
             snapshot(dialog.getDialogPane(), "exam-from-question-bank");
             ((ComboBox<SubjectInfo>) dialog.getDialogPane().lookup("#bank-subject")).setValue(subjects.get(1));
@@ -1426,6 +1529,11 @@ class ExamWorkflowUiTest {
     }
 
 
+    private static javafx.scene.Parent notificationCenter() {
+        return Window.getWindows().stream().map(Window::getScene).filter(java.util.Objects::nonNull)
+                .map(scene -> scene.lookup("#teacher-notification-center")).filter(java.util.Objects::nonNull)
+                .map(node -> (javafx.scene.Parent) node).findFirst().orElse(null);
+    }
     private static DialogPane notice(String selector) {
         return Window.getWindows().stream().map(Window::getScene).filter(java.util.Objects::nonNull)
                 .map(scene -> scene.lookup(selector)).filter(java.util.Objects::nonNull)

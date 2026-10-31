@@ -116,12 +116,13 @@ STT,MSV,Họ và tên,Ngày sinh,Lớp
 
 - Hỗ trợ BOM, dấu phẩy/chấm phẩy, ngày `dd/MM/yyyy` hoặc `yyyy-MM-dd`; tối đa 2 MB/2.000 sinh viên mỗi lần nhập.
 - Cột **Lớp** là lớp chính quy; danh sách được nhập vào lớp học phần đang chọn, không tự tạo lớp từ cột này.
-- MSV chưa có thì tạo hồ sơ; đã có và khớp thông tin thì dùng lại/thêm vào lớp. Không tạo nhiều tài khoản cho cùng sinh viên.
+- MSV chưa có thì tạo hồ sơ từ CSV; MSV đã có luôn dùng lại hồ sơ đang lưu để thêm vào lớp. Không tạo nhiều tài khoản cho cùng sinh viên và không ghi đè họ tên, ngày sinh hoặc lớp chính quy khi nhập lại.
 - STT lưu riêng theo lớp, phải dương và không trùng khi có giá trị. Nhập lại CSV có STT sẽ cập nhật theo MSV; không đánh số theo mã sinh viên hoặc vị trí hiển thị.
 - Nếu STT hiện **—**, dùng **Bổ sung STT từ CSV**. Mẫu ba cột cũ/STT trống vẫn nhập được nhưng cần bổ sung đủ STT trước khi chia ca.
-- Lỗi cấu trúc, trùng MSV hoặc xung đột họ tên/ngày sinh/lớp chính quy bị chặn; không nhập dở dang hoặc ghi đè hồ sơ dùng chung.
+- Nếu thông tin CSV khác hồ sơ đã lưu, xem trước hiển thị hồ sơ thực tế sẽ dùng, đánh dấu **Giữ hồ sơ đã lưu (CSV khác)** và cho xem thông tin CSV qua chú giải. Khác hồ sơ không chặn cả danh sách; bấm Xác nhận nhập để thêm vào lớp theo MSV. Sinh viên đã thuộc lớp không thêm trùng, chỉ cập nhật STT của lớp nếu có.
+- Lỗi cấu trúc, ngày sinh không hợp lệ, trùng MSV/STT trong danh sách vẫn bị chặn; nhập hợp lệ được lưu trong cùng giao dịch. Một file CSV dùng được cho nhiều lớp, không xóa sinh viên đang có nhưng không nằm trong file mới.
 
-Trong **Lớp & sinh viên**, bấm họ tên để sửa họ tên, ngày sinh hoặc lớp chính quy. MSV giữ cố định; cần xác nhận vì hồ sơ dùng chung ở mọi lớp, kể cả lớp của giảng viên khác. Ngày sinh sau khi sửa được dùng đăng nhập; STT riêng từng lớp và bản chốt danh sách ca không thay đổi. Chỉ sửa sinh viên thuộc lớp mình quản lý; Server chặn khi có lượt thi chưa nộp/đang chấm ở bất kỳ lớp nào, hoặc hồ sơ đã được người khác sửa trong lúc mở cửa sổ.
+Danh sách sinh viên chỉ xem và tìm kiếm, không có chức năng sửa hồ sơ. Kiểm tra đúng họ tên, ngày sinh và lớp chính quy trước lần tạo đầu tiên. Ngày sinh đang lưu tiếp tục dùng để đăng nhập ở mọi lớp; STT riêng theo lớp và bản chốt danh sách ca không đổi khi nhập CSV ở lớp khác.
 
 ## Nhập câu hỏi từ Word
 
@@ -142,22 +143,26 @@ Mỗi tiêu đề MỨC 1–6 áp dụng cho các câu phía dưới. Nội dung
 ## Đề thi, mã đề và khôi phục
 
 - Tạo đề nhanh lấy đúng số câu từng mức, tổng 1–200, không trùng. Đổi một câu lấy câu khác cùng mức; thiếu ngân hàng thì giữ danh sách đang soạn và báo lỗi.
-- Một mã dùng thứ tự gốc; 2–8 mã là 101–108, dùng cùng bộ nội dung nhưng đảo câu/lựa chọn. Phân mã ngẫu nhiên cân bằng, không đảm bảo hai máy ngồi cạnh khác mã.
-- Nhận diện một số câu tham chiếu A/B/“tất cả ở trên” để giữ thứ tự lựa chọn; không bảo đảm hiểu mọi cách diễn đạt. Nên soạn câu độc lập, không phụ thuộc số câu khác.
+- Đề mới và lượt thi mới sắp câu từ mức 1 đến 6. Một mã giữ thứ tự trong từng mức; 2–8 mã là 101–108, dùng cùng bộ câu và cùng số câu ở mỗi mức, chỉ đảo câu trong cùng mức và đảo lựa chọn phù hợp. Phân mã ngẫu nhiên cân bằng, không đảm bảo hai máy ngồi cạnh khác mã.
+- Bảng soạn đề hiển thị theo mức tăng dần; nút Lên/Xuống chỉ đổi vị trí câu cùng mức. Độ khó được lưu trong bản sao câu hỏi, sửa ngân hàng không làm đổi cơ cấu đề đã lưu. Lượt thi đã mở giữ bố cục cũ khi tiếp tục hoặc khởi động lại; câu cũ thiếu độ khó được đặt thành nhóm riêng cuối đề khi mở lượt mới, không tự đoán mức.
+- Nhận diện một số câu tham chiếu A/B/“tất cả ở trên” để giữ thứ tự lựa chọn; không bảo đảm hiểu mọi cách diễn đạt. Nếu giữ lựa chọn và đảo trong từng mức không tạo đủ mã khác nhau, hệ thống yêu cầu giảm số mã hoặc thêm câu phù hợp. Nên soạn câu độc lập, không phụ thuộc số câu khác.
 - Đề và lượt thi lưu bản sao câu hỏi, nên sửa ngân hàng không đổi đề/điểm cũ. Mã/bố cục/đáp án đã lưu giữ nguyên khi vào lại.
 - Mỗi thay đổi gửi `ANSWER_UPDATE`. Server lưu lựa chọn hợp lệ; lựa chọn chưa được Server lưu không được bảo đảm khôi phục. Ngắt mạng không dừng đồng hồ.
 - Hết giờ Server chấm cả lượt offline. Yêu cầu nhận trước hạn vẫn được xét nếu phải chờ xử lý; nhận sau hạn không sửa kết quả. Nộp lặp không tạo thêm điểm.
 - Sau sự cố, đăng nhập đúng giảng viên: Server tự mở kết nối và khôi phục ca còn hạn, cả người đã vào và chưa vào bài đều được nhận ca đúng quyền. Ca đã dừng không được mở lại khi khởi động lại.
-- Bảng theo dõi tách **Kết nối** Online/Offline khỏi **Bài thi của ca này** đọc từ database, cập nhật khoảng 2 giây. Đã nộp vẫn giữ khi offline; chưa từng vào đến hết hạn là Vắng thi, không tự tạo điểm 0.
+- Bảng theo dõi tách **Kết nối** Online/Offline khỏi **Bài thi của ca này** đọc từ database, cập nhật khoảng 2 giây. Cột **Mã đề** lấy mã đã phân theo đúng sinh viên/lượt thi, hiển thị cả người chưa vào hoặc offline; trước khi mở ca là **—**, lượt một mã là **Gốc**. Đã nộp vẫn giữ khi offline; chưa từng vào đến hết hạn là Vắng thi, không tự tạo điểm 0.
 - Dừng/đóng/đổi giảng viên bị chặn khi ca còn hạn hoặc còn lượt đang hoàn tất chấm/lưu.
 
 ## Cảnh báo theo ca thi
 
 - Client mới theo dõi việc rời cửa sổ hoặc thu nhỏ khi đang làm bài. Sau khoảng 3 giây rời cửa sổ, Client gửi xác nhận để Server ghi một sự kiện và hiện nhắc nhở ngay trên màn hình thi, kể cả khi sinh viên chưa quay lại. Khi quay lại, thời lượng được cập nhật cho cùng sự kiện, không tăng thêm số lần. Các hộp thoại thuộc ứng dụng thi được xem là vẫn trong ứng dụng. Không theo dõi ở phòng chờ hoặc sau khi nộp.
 - Server dùng thời điểm nhận tín hiệu rời/quay lại để tính thời lượng, không nhận MSV hoặc thời gian tự khai từ payload. Tín hiệu chỉ hợp lệ ở phiên hiện hành, đúng ca đang làm; mã sự kiện ngăn ghi lặp. Client cũ vẫn làm bài được nhưng không có tính năng theo dõi này.
-- Lần 1–2 nhắc sinh viên; từ lần 3, cột **Cảnh báo** trong bảng theo dõi ca hiện **Cần kiểm tra**. Bấm vào cột để xem nhật ký, gửi nhắc nhở tới sinh viên đang làm ca hoặc **Đánh dấu đã kiểm tra**. Đánh dấu không xóa lịch sử hay giảm số lần; sự kiện mới có thể cần kiểm tra lại.
+- Lần 1–2 nhắc sinh viên; từ lần 3, Server hiện thông báo nổi và tăng số trên nút **Thông báo** luôn có ở đầu cửa sổ, kể cả khi đang xem trang khác. Nhiều sinh viên đạt ngưỡng trong cùng lần cập nhật được gộp vào một thông báo. Mỗi sinh viên/lượt thi chỉ có một cảnh báo chờ xử lý; các lần tiếp theo cập nhật số đếm, không bật lại thông báo liên tục.
+- **Thông báo** mở danh sách chưa xử lý, có thể xem cả lịch sử đã xử lý. **Xem chi tiết** mở nhật ký đúng sinh viên/ca. Mở xem không tự xử lý; **Gửi nhắc nhở** thành công hoặc **Đánh dấu đã kiểm tra** chốt mốc xử lý. Sau mốc này phải có thêm 3 lần mới báo lại, tổng số lần vẫn giữ nguyên. Mốc xử lý và hàng chờ lưu qua các sự kiện trong database nên khởi động lại không mất cảnh báo chưa xử lý.
 - Gián đoạn kết nối và đăng nhập lại sau gián đoạn được ghi riêng, không cộng vào số lần rời cửa sổ. Không phân biệt được đóng Client với đứt mạng nên nhật ký không tự kết luận gian lận. Thời gian phát hiện mất kết nối phụ thuộc timeout.
 - Nhật ký `exam_events` thuộc từng sinh viên và lượt thi, lưu cả nhắc nhở và đánh dấu kiểm tra của giảng viên. Đổi ca không cộng dồn; đăng nhập lại vẫn còn lịch sử. Cảnh báo không tự trừ điểm, không tự khóa tài khoản và không thay đáp án.
+- Trong nhật ký, giảng viên có thể chọn **Đình chỉ bài thi**, nhập lý do và xác nhận riêng. Chỉ áp dụng bài đang làm trong ca của mình, kể cả sinh viên offline; không sửa bài đã nộp hoặc ca đã kết thúc. Đình chỉ chốt thời hạn của riêng sinh viên, ghi **Vi phạm quy chế** và điểm **0** theo quy ước của dự án, giữ đáp án và số câu đúng để đối chiếu. Đáp án nhận trước lúc chốt được xử lý trước khi hoàn tất bài; gửi muộn hoặc nộp lặp không đổi kết quả. Bảng theo dõi, bảng điểm và CSV đều có trạng thái/lý do; sinh viên nhận thông báo và kết quả, không được làm tiếp ca đó.
+- Đình chỉ không khóa tài khoản và không chặn ca khác. **Khóa tài khoản** là chức năng riêng: ngắt/chặn đăng nhập theo giảng viên, bài đã lưu được chấm theo hạn; không tự gán Vi phạm quy chế. Client mới có hỗ trợ dừng tương tác ngay khi bị đình chỉ; Client cũ nhận nhắc nhở và kết quả khi Server chấm xong. Khi cập nhật tính năng, chạy lại Server và dùng Client EXE mới.
 
 ## Kiến trúc và giao thức
 
@@ -174,7 +179,7 @@ Client JavaFX ── TCP / JSON Lines ── Server JavaFX ── Hibernate/JPA 
 | `server/service`, `entity`, `persistence` | Nghiệp vụ, phân quyền, dữ liệu và cấu hình MySQL |
 | `server/legacy/entity` | Hai mapping lịch sử thực hành, không còn UI/service/API thực hành |
 
-Mỗi message là một dòng JSON UTF-8 `{type,payload}`. Luồng chính: `LOGIN` → `LOGIN_RESULT` → `EXAM_AVAILABLE` → `JOIN_EXAM` → `EXAM_STARTED` → `ANSWER_UPDATE` / `SUBMIT_EXAM` → `SUBMIT_RESULT`. Có `HISTORY_REQUEST/RESULT`, `PING/PONG`, `EXAM_FOCUS_CHANGED` / `EXAM_WARNING_STATUS`, cảnh báo/khóa và `ERROR`.
+Mỗi message là một dòng JSON UTF-8 `{type,payload}`. Luồng chính: `LOGIN` → `LOGIN_RESULT` → `EXAM_AVAILABLE` → `JOIN_EXAM` → `EXAM_STARTED` → `ANSWER_UPDATE` / `SUBMIT_EXAM` → `SUBMIT_RESULT`. Có `HISTORY_REQUEST/RESULT`, `PING/PONG`, `EXAM_FOCUS_CHANGED` / `EXAM_WARNING_STATUS`, `EXAM_DISQUALIFIED`, cảnh báo/khóa và `ERROR`.
 
 Server dùng virtual thread, FIFO cho từng kết nối và giới hạn 16 yêu cầu xử lý đồng thời; outbox và timeout ghi riêng. Client gửi heartbeat mỗi 5 giây, timeout đọc 20 giây. Một MSV có một phiên hiện hành; đăng nhập mới thay phiên cũ.
 

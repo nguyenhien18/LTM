@@ -47,6 +47,7 @@ public class ClientHandler implements Runnable {
     private Long focusExam;
     private Instant focusLeftAt;
     private boolean focusMonitoring;
+    private boolean examControls;
 
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
                          Supplier<Long> publishedExamId, ReadWriteLock attemptGate,
@@ -173,6 +174,7 @@ public class ClientHandler implements Runnable {
         }
         studentCode = s.getStudentCode();
         focusMonitoring = request.isFocusMonitoring();
+        examControls = request.isExamControls();
         String ip = socket.getInetAddress().getHostAddress();
         registry.register(new ClientSession(s.getStudentCode(), s.getFullName(), ip, this));
         if (authService.isAccountLocked(studentCode)) {
@@ -292,6 +294,11 @@ public class ClientHandler implements Runnable {
     public synchronized boolean warnViolation(String reason) {
         if (closed || studentCode == null || !registry.isCurrent(studentCode, this)) return false;
         return writer != null && writer.send(JsonUtil.message(MessageType.VIOLATION_WARNING, reason), false);
+    }
+    public synchronized void notifyDisqualification(Long roundId, String reason) {
+        if (closed || !registry.isCurrent(studentCode, this)) return;
+        send(examControls ? JsonUtil.message(MessageType.EXAM_DISQUALIFIED, new ExamDisqualification(roundId, reason))
+                : JsonUtil.message(MessageType.VIOLATION_WARNING, "Bài thi bị đình chỉ. Lý do: " + reason));
     }
 
     public synchronized void disconnectLocked(String reason) {
