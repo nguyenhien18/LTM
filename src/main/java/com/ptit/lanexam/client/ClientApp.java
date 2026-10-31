@@ -74,17 +74,21 @@ public class ClientApp extends Application {
     private final Map<String, Button> dashboardNavigation = new LinkedHashMap<>();
     private TableView<StudentResult> combinedResults;
     private Alert submitConfirmation;
+    private ExamFocusMonitor focusMonitor;
+    private Label warningBanner;
     private record StudentResult(String title, String score, java.time.LocalDateTime submittedAt, String detail) {}
 
     @Override
     public void start(Stage stage) {
         this.stage = stage;
+        focusMonitor = new ExamFocusMonitor(stage, this::sendFocusChange);
         client.setMessageListener(this::onMessage);
         client.setDisconnectListener(message -> {
             int version = connectionVersion;
             Platform.runLater(() -> {
                 if (version != connectionVersion) return;
                 if (submitConfirmation != null) submitConfirmation.close();
+                focusMonitor.stop();
                 connectionVersion++;
                 answerSuppliers.clear();
                 currentExam = null;
@@ -102,6 +106,7 @@ public class ClientApp extends Application {
     }
 
     private void showLoginScene() {
+        if (focusMonitor != null) focusMonitor.stop();
         dashboardVisible = false;
         dashboardScene = null;
         assessmentCards = null;
@@ -199,7 +204,7 @@ public class ClientApp extends Application {
                 try {
                     client.connect(host, finalPort);
                     client.send(JsonUtil.message(MessageType.LOGIN,
-                            new LoginRequest(code, birthDate.toString())));
+                            new LoginRequest(code, birthDate.toString(), true)));
                     Platform.runLater(() -> {
                         if (version == connectionVersion) connectionLabel.setText("Đã kết nối, đang xác thực...");
                     });
@@ -238,6 +243,15 @@ public class ClientApp extends Application {
                     case EXAM_STARTED -> showExam(JsonUtil.payload(message, ExamDto.class));
                     case SUBMIT_RESULT -> showResult(JsonUtil.payload(message, SubmitResult.class));
                     case VIOLATION_WARNING -> showModerationNotice(message.getPayload().asText(), false);
+                    case EXAM_WARNING_STATUS -> {
+                        var warning = JsonUtil.payload(message, ExamWarningStatus.class);
+                        if (currentExam != null && currentExam.getId().equals(warning.examId()) && warningBanner != null) {
+                            warningBanner.setText(warning.message() == null || warning.message().isBlank()
+                                    ? "Cảnh báo rời cửa sổ: " + warning.count() + " lần"
+                                    : warning.message());
+                            warningBanner.setVisible(warning.count() > 0); warningBanner.setManaged(warning.count() > 0);
+                        }
+                    }
                     case ACCOUNT_LOCKED -> {
                         logoutToLogin();
                         showModerationNotice(message.getPayload().asText(), true);
@@ -250,6 +264,7 @@ public class ClientApp extends Application {
                         if (currentExam != null && submitButton != null) {
                             submitButton.setDisable(false);
                             submitButton.setText("Nộp bài thi");
+                            focusMonitor.start(currentExam.getId());
                         }
                         joinPending = false;
                         refreshDashboard();
@@ -502,8 +517,12 @@ public class ClientApp extends Application {
         HBox bottom = AppUi.toolbar(AppUi.label("Kiểm tra đáp án trước khi nộp. Bài đã nộp không thể sửa.", "muted"),
                 AppUi.spacer(), submitButton);
         bottom.getStyleClass().add("status-bar");
-        root.setBottom(bottom);
+        warningBanner = new Label(); warningBanner.setId("exam-warning-banner"); warningBanner.setWrapText(true);
+        warningBanner.setStyle("-fx-text-fill: #9a5b00; -fx-padding: 8 16;");
+        warningBanner.setVisible(false); warningBanner.setManaged(false);
+        root.setBottom(new VBox(warningBanner, bottom));
         stage.setScene(AppUi.desktopScene(root, 1000, 760));
+        focusMonitor.start(exam.getId());
 
         if (timer != null) timer.stop();
         timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> {
@@ -541,6 +560,7 @@ public class ClientApp extends Application {
             }
         }
         submitButton.setDisable(true);
+        focusMonitor.stop();
         submitButton.setText("Đang nộp...");
         SubmitExamRequest request = new SubmitExamRequest(currentExam.getId(), snapshotAnswers());
         int version = connectionVersion;
@@ -580,6 +600,7 @@ public class ClientApp extends Application {
     }
 
     private void showResult(SubmitResult result) {
+        focusMonitor.stop();
         if (submitConfirmation != null) submitConfirmation.close();
         dashboardVisible = false;
         if (dashboardTimer != null) dashboardTimer.stop();
@@ -609,6 +630,7 @@ public class ClientApp extends Application {
     }
 
     private void logoutToLogin() {
+        focusMonitor.stop();
         if (submitConfirmation != null) submitConfirmation.close();
         connectionVersion++;
         for (Alert notice : List.copyOf(moderationNotices)) notice.close();
@@ -691,6 +713,7 @@ public class ClientApp extends Application {
 
     @Override
     public void stop() {
+        if (focusMonitor != null) focusMonitor.close();
         if (submitConfirmation != null) submitConfirmation.close();
         for (Alert notice : List.copyOf(moderationNotices)) notice.close();
         if (timer != null) timer.stop();
@@ -702,5 +725,14 @@ public class ClientApp extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private void sendFocusChange(ExamFocusChange change) {
+        int version = connectionVersion;
+        outbound.execute(() -> {
+            if (version != connectionVersion) return;
+            try { client.send(JsonUtil.message(MessageType.EXAM_FOCUS_CHANGED, change)); }
+            catch (Exception ignored) { /* Connection failures are displayed by the connection listener. */ }
+        });
     }
 }

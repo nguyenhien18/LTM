@@ -81,6 +81,8 @@ mvn javafx:run -Pclient
 
 Nhập IP của máy giảng viên, cổng 5000, MSV và ngày sinh đúng danh sách CSV. `127.0.0.1` chỉ dùng khi Client và Server chạy cùng máy. Client không cần MySQL hoặc các biến `DB_*`.
 
+Sau khi giảng viên đăng nhập thành công, Server tự mở cổng nhận Client; không cần bấm khởi động Server. Địa chỉ kết nối hiển thị ở đầu cửa sổ. Sinh viên trong danh sách có thể đăng nhập vào phòng chờ trước khi chia ca hoặc mở bài thi. Nếu cổng đang bị ứng dụng khác chiếm, Server báo lỗi kết nối; đóng bản Server trùng và đăng nhập lại.
+
 Ngày sinh có thể chọn bằng lịch hoặc gõ theo `dd/MM/yyyy`. Nếu đăng nhập thất bại, có thể sửa dữ liệu và thử lại ngay. Sinh viên phải thuộc ít nhất một lớp của giảng viên đang mở Server.
 
 ## Quy trình tổ chức thi
@@ -89,10 +91,12 @@ Ngày sinh có thể chọn bằng lịch hoặc gõ theo `dd/MM/yyyy`. Nếu đ
 2. **Lớp & sinh viên:** tạo môn và lớp học phần, nhập CSV, kiểm tra xem trước rồi xác nhận.
 3. **Ngân hàng câu hỏi:** chọn môn, soạn câu hoặc nhập `.docx`.
 4. **Tổ chức thi → Đề thi:** tạo đề mẫu, chọn thủ công hoặc nhập số câu từng mức để lấy ngẫu nhiên; kiểm tra rồi lưu.
-5. Khởi động TCP Server để sinh viên kết nối vào phòng chờ.
+5. Sinh viên kết nối vào phòng chờ bằng địa chỉ hiển thị trên Server (Server đã tự mở sau đăng nhập giảng viên).
 6. **Tổ chức thi → Ca thi:** chọn lớp; nếu cần chia ca thì đặt số người/ca và bấm **Chia ca theo STT**. Chọn ca, đề, số mã rồi **Chuẩn bị ca thi**.
 7. Kiểm tra danh sách/kết nối rồi bấm **Bắt đầu thi**. Đây là lúc đồng hồ chung bắt đầu; chuẩn bị chưa tính giờ.
-8. Theo dõi, chờ nộp/hết giờ, vào **Kết quả** để lọc và xuất CSV. Chờ ca trước hết hạn và chấm xong mới mở ca tiếp theo.
+8. Theo dõi đến hết giờ hoặc bấm **Dừng bài thi** để kết thúc sớm; vào **Kết quả** để lọc và xuất CSV. Chờ ca trước kết thúc và chấm xong mới mở ca tiếp theo.
+
+**Dừng bài thi** có bước xác nhận và chỉ áp dụng ca đang xem. Hệ thống chốt hạn ngay, ngừng nhận người mới vào ca, chấm đáp án đã nhận cho cả người online và offline, giữ nguyên bài đã nộp và ghi vắng người chưa vào bài. Các đáp án đã nhận trước thời điểm dừng được xử lý trước khi chấm; dữ liệu gửi muộn không thay điểm. Kết nối Server vẫn hoạt động để tổ chức ca tiếp theo. Đây là kết thúc ca, không phải tạm dừng rồi tiếp tục; khi đăng xuất hoặc đóng cửa sổ giảng viên thì Server mới đóng kết nối.
 
 Bảng **Kết quả** và CSV có đủ thí sinh theo danh sách ca đã chốt, kèm trạng thái Chưa vào bài / Đang làm / Đang chấm / Đã nộp / Hết giờ — đã chấm / Vắng thi. Chỉ kết luận vắng sau hạn và khi chưa từng vào bài. Người vắng hoặc chưa có kết quả để trống điểm, số câu đúng và thời gian nộp; bài đã chấm được 0 vẫn ghi `0.00`. Sinh viên nhập bổ sung sau lúc mở ca không được thêm vào báo cáo ca đó. Bản ghi tự chấm hết giờ được lưu riêng để phân biệt với nộp chủ động. Với ca cũ chưa lưu danh sách và không chia ca, chỉ khôi phục được các bài nộp đã có, không suy diễn danh sách vắng từ lớp hiện tại. Bấm Làm mới để cập nhật kết quả trước khi xuất.
 
@@ -143,9 +147,17 @@ Mỗi tiêu đề MỨC 1–6 áp dụng cho các câu phía dưới. Nội dung
 - Đề và lượt thi lưu bản sao câu hỏi, nên sửa ngân hàng không đổi đề/điểm cũ. Mã/bố cục/đáp án đã lưu giữ nguyên khi vào lại.
 - Mỗi thay đổi gửi `ANSWER_UPDATE`. Server lưu lựa chọn hợp lệ; lựa chọn chưa được Server lưu không được bảo đảm khôi phục. Ngắt mạng không dừng đồng hồ.
 - Hết giờ Server chấm cả lượt offline. Yêu cầu nhận trước hạn vẫn được xét nếu phải chờ xử lý; nhận sau hạn không sửa kết quả. Nộp lặp không tạo thêm điểm.
-- Sau sự cố, đăng nhập đúng giảng viên và khởi động TCP Server: ca còn hạn tự khôi phục, cả người đã vào và chưa vào bài đều được nhận ca đúng quyền.
+- Sau sự cố, đăng nhập đúng giảng viên: Server tự mở kết nối và khôi phục ca còn hạn, cả người đã vào và chưa vào bài đều được nhận ca đúng quyền. Ca đã dừng không được mở lại khi khởi động lại.
 - Bảng theo dõi tách **Kết nối** Online/Offline khỏi **Bài thi của ca này** đọc từ database, cập nhật khoảng 2 giây. Đã nộp vẫn giữ khi offline; chưa từng vào đến hết hạn là Vắng thi, không tự tạo điểm 0.
 - Dừng/đóng/đổi giảng viên bị chặn khi ca còn hạn hoặc còn lượt đang hoàn tất chấm/lưu.
+
+## Cảnh báo theo ca thi
+
+- Client mới theo dõi việc rời cửa sổ hoặc thu nhỏ khi đang làm bài. Sau khoảng 3 giây rời cửa sổ, Client gửi xác nhận để Server ghi một sự kiện và hiện nhắc nhở ngay trên màn hình thi, kể cả khi sinh viên chưa quay lại. Khi quay lại, thời lượng được cập nhật cho cùng sự kiện, không tăng thêm số lần. Các hộp thoại thuộc ứng dụng thi được xem là vẫn trong ứng dụng. Không theo dõi ở phòng chờ hoặc sau khi nộp.
+- Server dùng thời điểm nhận tín hiệu rời/quay lại để tính thời lượng, không nhận MSV hoặc thời gian tự khai từ payload. Tín hiệu chỉ hợp lệ ở phiên hiện hành, đúng ca đang làm; mã sự kiện ngăn ghi lặp. Client cũ vẫn làm bài được nhưng không có tính năng theo dõi này.
+- Lần 1–2 nhắc sinh viên; từ lần 3, cột **Cảnh báo** trong bảng theo dõi ca hiện **Cần kiểm tra**. Bấm vào cột để xem nhật ký, gửi nhắc nhở tới sinh viên đang làm ca hoặc **Đánh dấu đã kiểm tra**. Đánh dấu không xóa lịch sử hay giảm số lần; sự kiện mới có thể cần kiểm tra lại.
+- Gián đoạn kết nối và đăng nhập lại sau gián đoạn được ghi riêng, không cộng vào số lần rời cửa sổ. Không phân biệt được đóng Client với đứt mạng nên nhật ký không tự kết luận gian lận. Thời gian phát hiện mất kết nối phụ thuộc timeout.
+- Nhật ký `exam_events` thuộc từng sinh viên và lượt thi, lưu cả nhắc nhở và đánh dấu kiểm tra của giảng viên. Đổi ca không cộng dồn; đăng nhập lại vẫn còn lịch sử. Cảnh báo không tự trừ điểm, không tự khóa tài khoản và không thay đáp án.
 
 ## Kiến trúc và giao thức
 
@@ -162,11 +174,11 @@ Client JavaFX ── TCP / JSON Lines ── Server JavaFX ── Hibernate/JPA 
 | `server/service`, `entity`, `persistence` | Nghiệp vụ, phân quyền, dữ liệu và cấu hình MySQL |
 | `server/legacy/entity` | Hai mapping lịch sử thực hành, không còn UI/service/API thực hành |
 
-Mỗi message là một dòng JSON UTF-8 `{type,payload}`. Luồng chính: `LOGIN` → `LOGIN_RESULT` → `EXAM_AVAILABLE` → `JOIN_EXAM` → `EXAM_STARTED` → `ANSWER_UPDATE` / `SUBMIT_EXAM` → `SUBMIT_RESULT`. Có `HISTORY_REQUEST/RESULT`, `PING/PONG`, cảnh báo/khóa và `ERROR`.
+Mỗi message là một dòng JSON UTF-8 `{type,payload}`. Luồng chính: `LOGIN` → `LOGIN_RESULT` → `EXAM_AVAILABLE` → `JOIN_EXAM` → `EXAM_STARTED` → `ANSWER_UPDATE` / `SUBMIT_EXAM` → `SUBMIT_RESULT`. Có `HISTORY_REQUEST/RESULT`, `PING/PONG`, `EXAM_FOCUS_CHANGED` / `EXAM_WARNING_STATUS`, cảnh báo/khóa và `ERROR`.
 
 Server dùng virtual thread, FIFO cho từng kết nối và giới hạn 16 yêu cầu xử lý đồng thời; outbox và timeout ghi riêng. Client gửi heartbeat mỗi 5 giây, timeout đọc 20 giây. Một MSV có một phiên hiện hành; đăng nhập mới thay phiên cũ.
 
-CSDL có 14 bảng phục vụ thi: tài khoản, môn/lớp/thành viên, ngân hàng, đề/câu chốt, ca/thành viên ca, lượt làm, bài nộp, đáp án và khóa sinh viên theo giảng viên. Hai bảng thực hành cũ được giữ để đọc lịch sử; ứng dụng không xóa dữ liệu cũ hoặc tự gán dữ liệu chưa có chủ cho giảng viên mới.
+CSDL có 15 bảng phục vụ thi: tài khoản, môn/lớp/thành viên, ngân hàng, đề/câu chốt, ca/thành viên ca, lượt làm, bài nộp, đáp án, nhật ký cảnh báo và khóa sinh viên theo giảng viên. Hai bảng thực hành cũ được giữ để đọc lịch sử; ứng dụng không xóa dữ liệu cũ hoặc tự gán dữ liệu chưa có chủ cho giảng viên mới.
 
 Giảng viên chỉ cho đăng nhập và khóa/mở khóa sinh viên có trong ít nhất một lớp học phần của mình. Khóa lưu theo cặp giảng viên–sinh viên trong `teacher_student_locks`: nếu sinh viên học cả A và B, A khóa không chặn sinh viên vào Server của B; B không thể gỡ khóa do A đặt. Danh sách tài khoản bị khóa chỉ hiển thị khóa của giảng viên đang đăng nhập. Cờ khóa toàn cục ở dữ liệu phiên bản cũ được giữ để tương thích, không tự chuyển thành khóa của giảng viên mới.
 
@@ -183,4 +195,4 @@ Có test 80 socket cùng tồn tại trên loopback; kết quả đó không tha
 
 ## Giới hạn
 
-Xác thực sinh viên bằng ngày sinh còn yếu và TCP chưa TLS; phù hợp BTL/demo trên LAN tin cậy. Cảnh báo do giảng viên gửi thủ công, không giám sát màn hình. Chưa có thi ngoại tuyến, tự reconnect, ACK riêng từng lần lưu, gia hạn cá nhân hoặc kết thúc sớm. Khóa sinh viên áp dụng cho mọi lớp của giảng viên đặt khóa, cần giảng viên đó mở khóa để đăng nhập lại.
+Xác thực sinh viên bằng ngày sinh còn yếu và TCP chưa TLS; phù hợp BTL/demo trên LAN tin cậy. Theo dõi focus chỉ nhận tín hiệu từ Client, không quay/chụp màn hình, không phát hiện điện thoại và không bảo đảm chống Client bị chỉnh sửa. Chưa có thi ngoại tuyến, tự reconnect, ACK riêng từng lần lưu hoặc gia hạn cá nhân. Khóa sinh viên áp dụng cho mọi lớp của giảng viên đặt khóa, cần giảng viên đó mở khóa để đăng nhập lại.

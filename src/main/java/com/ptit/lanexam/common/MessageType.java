@@ -13,6 +13,8 @@ public enum MessageType {
     SUBMIT_EXAM,
     SUBMIT_RESULT,
     VIOLATION_WARNING,
+    EXAM_FOCUS_CHANGED,
+    EXAM_WARNING_STATUS,
     ACCOUNT_LOCKED,
     PING,
     PONG,

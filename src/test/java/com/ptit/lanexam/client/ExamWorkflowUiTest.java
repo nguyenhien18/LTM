@@ -247,8 +247,7 @@ class ExamWorkflowUiTest {
             try {
                 awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
                 loginTeacherInUi(stage, "gvprogress");
-                fx(() -> { ((Button) stage.getScene().lookup("#server-start")).fire(); return null; });
-                awaitFx(() -> !stage.getScene().lookup("#server-stop").isDisabled());
+                assertTrue(app.getListeningPort() > 0);
                 peer.connect("127.0.0.1", app.getListeningPort());
                 peer.send(JsonUtil.message(MessageType.LOGIN, new LoginRequest("ST001", "2003-05-12")));
                 fx(() -> { ((Button) stage.getScene().lookup("#nav-room")).fire(); return null; });
@@ -257,8 +256,28 @@ class ExamWorkflowUiTest {
                 assertEquals("Offline", fx(() -> progressCell(stage, 1, "Kết nối")));
                 assertEquals("Đang làm", fx(() -> progressCell(stage, 1, "Bài thi của ca này")));
                 assertEquals("Chưa vào bài", fx(() -> progressCell(stage, 2, "Bài thi của ca này")));
+                for (int index = 0; index < 3; index++) exams.events().focusReturned(round.getId(), "ST002", UUID.randomUUID().toString(),
+                        Instant.now().minusSeconds(4), Instant.now());
+                awaitFx(() -> progressCell(stage, 1, "Cảnh báo").contains("3 lần") && progressCell(stage, 1, "Cảnh báo").contains("Cần kiểm tra"));
+                Platform.runLater(() -> {
+                    var table = (TableView<?>) stage.getScene().lookup("#exam-roster");
+                    table.applyCss(); table.layout();
+                    table.lookupAll(".hyperlink").stream().filter(node -> ((Hyperlink) node).getText().contains("Cần kiểm tra"))
+                            .map(node -> (Hyperlink) node).findFirst().orElseThrow().fire();
+                });
+                awaitFx(() -> notice("#exam-warning-journal") != null
+                        && ((TableView<?>) notice("#exam-warning-journal").lookup("#warning-journal-events")).getItems().size() == 3);
+                fx(() -> {
+                    assertTrue(notice("#exam-warning-journal").lookup("#warning-journal-remind").isDisabled(), "Offline students cannot receive a reminder");
+                    snapshot(notice("#exam-warning-journal"), "exam-warning-journal");
+                    ((Button) notice("#exam-warning-journal").lookup("#warning-journal-review")).fire(); return null;
+                });
+                awaitFx(() -> !((Label) notice("#exam-warning-journal").lookup("#warning-journal-state")).getText().contains("Cần kiểm tra"));
+                fx(() -> { ((Button) notice("#exam-warning-journal").lookupButton(ButtonType.CLOSE)).fire(); return null; });
+                awaitFx(() -> !progressCell(stage, 1, "Cảnh báo").contains("Cần kiểm tra"));
                 selectProgressClass(stage, b.id());
                 assertEquals("Chưa mở thi", fx(() -> progressCell(stage, 0, "Bài thi của ca này")));
+                assertEquals("0 lần", fx(() -> progressCell(stage, 1, "Cảnh báo")));
                 selectProgressClass(stage, a.id());
                 assertEquals("Đã nộp", fx(() -> progressCell(stage, 0, "Bài thi của ca này")));
                 peer.close();
@@ -276,6 +295,40 @@ class ExamWorkflowUiTest {
                         && progressCell(stage, 2, "Bài thi của ca này").equals("Vắng thi"));
                 fx(() -> { snapshot(stage.getScene().getRoot(), "recovered-round-progress.png"); return null; });
             } finally { peer.close(); fx(() -> { app.stop(); stage.close(); return null; }); }
+        }
+    }
+
+    @Test void focusMonitorIgnoresOwnedDialogsAndStopsAfterTheAttempt() throws Exception {
+        var reports = new java.util.concurrent.LinkedBlockingQueue<ExamFocusChange>();
+        ExamFocusMonitor[] monitor = new ExamFocusMonitor[1];
+        Stage[] windows = new Stage[3];
+        fx(() -> {
+            windows[0] = new Stage(); windows[0].setScene(new Scene(new Label("Exam"), 400, 200)); windows[0].show(); windows[0].requestFocus();
+            monitor[0] = new ExamFocusMonitor(windows[0], reports::add); return null;
+        });
+        try {
+            awaitFx(() -> windows[0].isFocused());
+            fx(() -> { monitor[0].start(10L); return null; });
+            fx(() -> {
+                windows[1] = new Stage(); windows[1].initOwner(windows[0]); windows[1].setScene(new Scene(new Label("Owned dialog"), 200, 100));
+                windows[1].show(); windows[1].requestFocus(); return null;
+            });
+            awaitFx(() -> windows[1].isFocused());
+            fx(() -> null);
+            assertTrue(reports.isEmpty(), "An owned dialog must count as focus inside the exam application");
+            fx(() -> {
+                windows[1].close(); windows[0].requestFocus();
+                windows[2] = new Stage(); windows[2].setScene(new Scene(new Label("Other app"), 200, 100)); windows[2].show(); windows[2].requestFocus(); return null;
+            });
+            var left = reports.poll(3, TimeUnit.SECONDS); assertNotNull(left); assertFalse(left.focused());
+            var stillAway = reports.poll(5, TimeUnit.SECONDS); assertNotNull(stillAway); assertFalse(stillAway.focused());
+            assertEquals(left.episodeId(), stillAway.episodeId(), "Threshold confirmation belongs to the same episode");
+            fx(() -> { windows[2].close(); windows[0].requestFocus(); return null; });
+            var back = reports.poll(3, TimeUnit.SECONDS); assertNotNull(back); assertTrue(back.focused()); assertEquals(left.episodeId(), back.episodeId());
+            fx(() -> { monitor[0].stop(); windows[0].setIconified(true); return null; });
+            fx(() -> null); assertTrue(reports.isEmpty());
+        } finally {
+            fx(() -> { monitor[0].close(); for (Stage window : windows) if (window != null) window.close(); return null; });
         }
     }
 
@@ -565,9 +618,10 @@ class ExamWorkflowUiTest {
                 fx(() -> {
                     assertEquals(4, teacherStage.getScene().getRoot().lookupAll(".nav-button").size());
                     assertNull(teacherStage.getScene().lookup("#nav-assessments"));
-                    ((Button) teacherStage.getScene().lookup("#server-start")).fire(); return null;
+                    assertNull(teacherStage.getScene().lookup("#server-start"));
+                    assertNull(teacherStage.getScene().lookup("#server-stop")); return null;
                 });
-                awaitFx(() -> !teacherStage.getScene().lookup("#server-stop").isDisabled());
+                assertTrue(app.getListeningPort() > 0);
                 awaitFx(() -> teacherStage.getScene().lookup("#exam-class") instanceof ComboBox<?> box && box.getItems().size() == 2);
                 fx(() -> {
                     ComboBox<com.ptit.lanexam.server.service.ClassInfo> group = (ComboBox<com.ptit.lanexam.server.service.ClassInfo>) teacherStage.getScene().lookup("#exam-class");
@@ -641,10 +695,20 @@ class ExamWorkflowUiTest {
                     assertTrue(((RadioButton) students[1].getScene().lookup("#question-card-1").lookupAll(".radio-button").stream()
                             .filter(n -> ((RadioButton) n).getText().contains("TCP")).findFirst().orElseThrow()).isSelected());
                     assertEquals("1 / 1 đã trả lời", ((Label) students[1].getScene().lookup("#exam-progress")).getText());
-                    ((Button) students[1].getScene().lookup("#exam-submit")).fire(); return null;
+                    return null;
                 });
                 assertEquals(deadline, exams.getActiveExam().getDeadlineEpochMillis());
+                awaitFx(() -> !teacherStage.getScene().lookup("#exam-end").isDisabled());
+                Platform.runLater(() -> ((Button) teacherStage.getScene().lookup("#exam-end")).fire());
+                awaitFx(() -> notice("#exam-end-confirmation") != null);
+                fx(() -> { ((Button) notice("#exam-end-confirmation").lookupButton(ButtonType.CANCEL)).fire(); return null; });
+                assertEquals(deadline, exams.getActiveExam().getDeadlineEpochMillis(), "Cancel must not end the round");
+                Platform.runLater(() -> ((Button) teacherStage.getScene().lookup("#exam-end")).fire());
+                awaitFx(() -> notice("#exam-end-confirmation") != null);
+                fx(() -> { ((Button) notice("#exam-end-confirmation").lookupButton(ButtonType.OK)).fire(); return null; });
                 awaitFx(() -> students[1].getScene().getRoot().lookupAll(".label").stream().anyMatch(n -> n instanceof Label label && label.getText().startsWith("Điểm:")));
+                assertTrue(app.getListeningPort() > 0);
+                assertTrue(exams.getActiveExam().getDeadlineEpochMillis() < deadline);
                 fx(() -> { ((Button) teacherStage.getScene().lookup("#nav-results")).fire(); return null; });
                 awaitFx(() -> teacherStage.getScene().lookup("#teacher-results") instanceof TableView<?> table && table.getItems().size() == 1);
                 fx(() -> {
@@ -685,9 +749,7 @@ class ExamWorkflowUiTest {
             try {
                 awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
                 loginTeacherInUi(stage, "gvfrozen");
-                fx(() -> { ((Button) stage.getScene().lookup("#server-start")).fire(); return null; });
-                awaitFx(() -> !stage.getScene().lookup("#server-stop").isDisabled()
-                        && !stage.getScene().lookup("#exam-prepare").isDisabled());
+                awaitFx(() -> !stage.getScene().lookup("#exam-prepare").isDisabled());
                 fx(() -> {
                     ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValueFactory().setValue(1);
                     ((Button) stage.getScene().lookup("#exam-prepare")).fire(); return null;
@@ -767,7 +829,7 @@ class ExamWorkflowUiTest {
                 Long saved = fx(() -> {
                     TableView<ClassService.RosterStudent> table = (TableView<ClassService.RosterStudent>) stage.getScene().lookup("#exam-roster");
                     assertEquals(1, table.getItems().getFirst().ordinal()); assertEquals(30, table.getItems().getLast().ordinal());
-                    assertTrue(stage.getScene().lookup("#exam-start").isDisabled(), "No running TCP server yet");
+                    assertFalse(stage.getScene().lookup("#exam-start").isDisabled(), "Server starts automatically after teacher login");
                     var selection = (ComboBox<com.ptit.lanexam.server.service.ExamShiftService.ShiftInfo>) stage.getScene().lookup("#exam-shift");
                     Long id = selection.getValue().id();
                     snapshot(stage.getScene().getRoot(), "mcq-teacher-split-shifts");
@@ -800,7 +862,7 @@ class ExamWorkflowUiTest {
             }
             @Override public boolean isAccountLocked(String code) { return false; }
         };
-        ExamService exams = new ExamService() {
+        ExamService exams = new UiExamStub() {
             @Override public Optional<ExamDto> recoverPublishedExam() { return Optional.empty(); }
 
             @Override public void finalizeExpiredAttempts() {}
@@ -1003,7 +1065,7 @@ class ExamWorkflowUiTest {
         };
         ExamDto exam = new ExamDto(101L, "Đề kiểm tra mạng", 120, List.of(
                 new QuestionDto(1L, "Giao thức tin cậy?", "MULTIPLE_CHOICE", List.of("A. TCP", "B. UDP", "C. IP", "D. ICMP"))));
-        ExamService exams = new ExamService() {
+        ExamService exams = new UiExamStub() {
             @Override public Optional<ExamDto> recoverPublishedExam() { return Optional.empty(); }
 
             @Override public void finalizeExpiredAttempts() {}
@@ -1078,7 +1140,7 @@ class ExamWorkflowUiTest {
         try (var em = factory.createEntityManager()) {
             em.getTransaction().begin(); em.persist(new Student("ST001", "Nguyễn An", LocalDate.of(2003, 5, 12))); em.getTransaction().commit();
         }
-        ServerApp app = new ServerApp(factory::createEntityManager, () -> {});
+        ServerApp app = new ServerApp(factory::createEntityManager, () -> {}, 0);
         Stage stage = fx(() -> { Stage created = new Stage(); app.start(created); return created; });
         try {
             awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
@@ -1093,7 +1155,9 @@ class ExamWorkflowUiTest {
             loginTeacherInUi(stage, "gv01");
             fx(() -> {
                 assertTrue(((Label) stage.getScene().lookup("#active-teacher")).getText().contains("Nguyễn Thị Lan (gv01)"));
-                assertNotNull(stage.getScene().lookup("#server-start"));
+                assertNull(stage.getScene().lookup("#server-start"));
+                assertNull(stage.getScene().lookup("#server-stop"));
+                assertTrue(app.getListeningPort() > 0);
                 snapshot(stage.getScene().getRoot(), "teacher-server-workspace");
                 return null;
             });
@@ -1154,7 +1218,7 @@ class ExamWorkflowUiTest {
                     "Chọn A", QuestionType.MULTIPLE_CHOICE, "Một", "Hai", "Ba", "Bốn", "A"))));
             var round = exams.activateExam(template.id(), enrolledUiClass(factory, teacher.id()));
             exams.startAttempt("ST001", round.getId());
-            ServerApp app = new ServerApp(factory::createEntityManager, () -> {});
+            ServerApp app = new ServerApp(factory::createEntityManager, () -> {}, 0);
             Stage stage = fx(() -> { Stage created = new Stage(); app.start(created); return created; });
             try {
                 awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
@@ -1266,7 +1330,7 @@ class ExamWorkflowUiTest {
         AtomicInteger joins = new AtomicInteger();
         ExamDto round = new ExamDto(99L, "Đề sắp hết giờ", 4, List.of());
         round.setDeadlineEpochMillis(deadline);
-        ExamService exams = new ExamService() {
+        ExamService exams = new UiExamStub() {
             @Override public Optional<ExamDto> recoverPublishedExam() { return Optional.empty(); }
 
             @Override public void finalizeExpiredAttempts() {}
@@ -1355,7 +1419,9 @@ class ExamWorkflowUiTest {
             ((PasswordField) stage.getScene().lookup("#teacher-login-password")).setText("Matkhau123!");
             ((Button) stage.getScene().lookup("#teacher-login-submit")).fire(); return null;
         });
-        awaitFx(() -> stage.getScene().lookup("#active-teacher") != null);
+        awaitFx(() -> stage.getScene().lookup("#active-teacher") != null
+                && !stage.getScene().lookup("#teacher-logout").isDisabled()
+                && !((Label) stage.getScene().lookup("#server-address")).getText().isBlank());
         fx(() -> { ((Button) stage.getScene().lookup("#nav-room")).fire(); return null; });
     }
 
@@ -1420,6 +1486,20 @@ class ExamWorkflowUiTest {
             catch (Throwable ex) { result.completeExceptionally(ex); }
         });
         return result.get(10, TimeUnit.SECONDS);
+    }
+
+    private static class UiExamStub extends ExamService {
+        private final com.ptit.lanexam.server.service.ExamEventService events = new com.ptit.lanexam.server.service.ExamEventService(
+                () -> { throw new AssertionError("UI stub must not access a real database"); }, null, java.time.Clock.systemUTC()) {
+            @Override public ExamWarningStatus status(Long round, String code, String message) { return new ExamWarningStatus(round, 0, false, message); }
+            @Override public ExamWarningStatus focusReturned(Long round, String code, String episode, Instant left, Instant back) { return status(round, code, ""); }
+            @Override public ExamWarningStatus focusStillAway(Long round, String code, String episode, Instant left, Instant back) { return status(round, code, ""); }
+            @Override public void connection(Long round, String code, boolean connected) {}
+            @Override public void reminder(Long round, String code, String text) {}
+        };
+        UiExamStub() { super(() -> { throw new AssertionError("UI stub must not access a real database"); }); }
+        @Override public Optional<ExamDto> getOpenAttempt(String code) { return Optional.empty(); }
+        @Override public com.ptit.lanexam.server.service.ExamEventService events() { return events; }
     }
 
     private static void snapshot(javafx.scene.Parent root, String name) {

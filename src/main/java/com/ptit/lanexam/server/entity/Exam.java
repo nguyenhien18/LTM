@@ -93,6 +93,10 @@ public class Exam extends TeacherOwned {
         deadlineAt = openedAt.plusSeconds(Math.multiplyExact((long) durationMinutes, 60));
     }
     public void setActive(boolean active) { this.active = active; }
+    public void endAt(Instant now) {
+        Instant cutoff = now.truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+        if (deadlineAt != null && cutoff.isBefore(deadlineAt)) deadlineAt = cutoff;
+    }
     public Long getTemplateExamId() { return templateExamId; }
     public void setTemplateExamId(Long templateExamId) { this.templateExamId = templateExamId; }
     public List<Question> getQuestions() { return questions; }

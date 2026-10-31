@@ -43,6 +43,10 @@ public class ClientHandler implements Runnable {
     private final AtomicLong incomingCharacters = new AtomicLong();
     private volatile boolean inputFinished;
     private volatile Thread processor;
+    private String focusEpisode;
+    private Long focusExam;
+    private Instant focusLeftAt;
+    private boolean focusMonitoring;
 
     public ClientHandler(Socket socket, SessionRegistry registry, AuthService authService, ExamService examService,
                          Supplier<Long> publishedExamId, ReadWriteLock attemptGate,
@@ -138,6 +142,7 @@ public class ClientHandler implements Runnable {
                 case ANSWER_UPDATE -> requireLogin(() -> examService.updateAnswers(studentCode,
                         JsonUtil.payload(message, SubmitExamRequest.class), receivedAt));
                 case PING -> requireLogin(() -> send(JsonUtil.message(MessageType.PONG, null)));
+                case EXAM_FOCUS_CHANGED -> requireLogin(() -> handleFocus(JsonUtil.payload(message, ExamFocusChange.class), receivedAt));
                 default -> sendError("Message không được hỗ trợ: " + message.getType());
             }
         } catch (Exception e) {
@@ -167,6 +172,7 @@ public class ClientHandler implements Runnable {
             return;
         }
         studentCode = s.getStudentCode();
+        focusMonitoring = request.isFocusMonitoring();
         String ip = socket.getInetAddress().getHostAddress();
         registry.register(new ClientSession(s.getStudentCode(), s.getFullName(), ip, this));
         if (authService.isAccountLocked(studentCode)) {
@@ -178,6 +184,9 @@ public class ClientHandler implements Runnable {
         // Login describes this connection; past submissions belong in history.
         sendHistory();
         sendAvailability();
+        try {
+            examService.getOpenAttempt(studentCode).ifPresent(attempt -> examService.events().connection(attempt.getId(), studentCode, true));
+        } catch (RuntimeException ex) { System.err.println("Cannot log reconnect: " + ex.getMessage()); }
     }
 
     private void handleJoin(JoinExamRequest request) {
@@ -250,6 +259,30 @@ public class ClientHandler implements Runnable {
         if (studentCode == null) return;
         registry.updateExam(studentCode, this, session -> session.startExam(exam));
         send(JsonUtil.message(MessageType.EXAM_STARTED, exam));
+        focusEpisode = null; focusExam = null; focusLeftAt = null;
+        if (focusMonitoring) send(JsonUtil.message(MessageType.EXAM_WARNING_STATUS, examService.events().status(exam.getId(), studentCode, "")));
+    }
+
+    private void handleFocus(ExamFocusChange report, Instant receivedAt) {
+        focusMonitoring = true;
+        ClientSession session = registry.find(studentCode);
+        if (report == null || report.examId() == null || report.episodeId() == null || report.episodeId().length() > 36)
+            throw new IllegalArgumentException("Tín hiệu cửa sổ không hợp lệ.");
+        java.util.UUID.fromString(report.episodeId());
+        if (session == null || session.getStatus() != ClientStatus.DOING_EXAM
+                || !java.util.Objects.equals(session.getExamId(), report.examId())) return;
+        if (!report.focused()) {
+            if (focusEpisode == null) { focusEpisode = report.episodeId(); focusExam = report.examId(); focusLeftAt = receivedAt; }
+            else if (report.episodeId().equals(focusEpisode) && report.examId().equals(focusExam)) {
+                var status = examService.events().focusStillAway(report.examId(), studentCode, report.episodeId(), focusLeftAt, receivedAt);
+                send(JsonUtil.message(MessageType.EXAM_WARNING_STATUS, status));
+            }
+        } else if (report.episodeId().equals(focusEpisode) && report.examId().equals(focusExam)) {
+            Instant left = focusLeftAt;
+            focusEpisode = null; focusExam = null; focusLeftAt = null;
+            var status = examService.events().focusReturned(report.examId(), studentCode, report.episodeId(), left, receivedAt);
+            send(JsonUtil.message(MessageType.EXAM_WARNING_STATUS, status));
+        }
     }
 
     private void sendError(String message) {
@@ -281,6 +314,11 @@ public class ClientHandler implements Runnable {
     }
 
     private void cleanup() {
+        ClientSession current = studentCode == null ? null : registry.find(studentCode);
+        if (current != null && current.getHandler() == this && current.getStatus() == ClientStatus.DOING_EXAM && acceptsAttempts.getAsBoolean()) {
+            try { examService.events().connection(current.getExamId(), studentCode, false); }
+            catch (RuntimeException ex) { System.err.println("Cannot log disconnect: " + ex.getMessage()); }
+        }
         if (studentCode != null) registry.remove(studentCode, this);
         closeQuietly();
     }

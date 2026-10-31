@@ -16,6 +16,7 @@
         <class>com.ptit.lanexam.server.entity.Submission</class>
         <class>com.ptit.lanexam.server.entity.StudentAnswer</class>
         <class>com.ptit.lanexam.server.entity.ExamAttempt</class>
+        <class>com.ptit.lanexam.server.entity.ExamEvent</class>
         <class>com.ptit.lanexam.server.legacy.entity.Assignment</class>
         <class>com.ptit.lanexam.server.legacy.entity.AssignmentSubmission</class>
 

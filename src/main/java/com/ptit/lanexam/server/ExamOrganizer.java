@@ -23,6 +23,7 @@ final class ExamOrganizer extends BorderPane {
     private final Label count = AppUi.label("", "muted");
     private final Button prepare = new Button("Chuẩn bị ca thi");
     private final Button start = new Button("Bắt đầu thi");
+    private final Button end = new Button("Dừng bài thi");
     private final ClassService classes;
     private final ExamService exams;
     private final ExamShiftService shifts;
@@ -35,6 +36,7 @@ final class ExamOrganizer extends BorderPane {
     private long deadlineMillis;
     private Long runningRound;
     private ExamService.RoundProgress progress;
+    private java.util.Map<String, ExamEventService.Summary> warnings = java.util.Map.of();
     private boolean progressLoading;
     private int progressTicks;
     private final javafx.animation.Timeline deadlineWatcher = new javafx.animation.Timeline();
@@ -67,6 +69,7 @@ final class ExamOrganizer extends BorderPane {
         split.setId("exam-split"); split.setOnAction(e -> split());
         prepare.setId("exam-prepare"); prepare.setOnAction(e -> prepare());
         start.setId("exam-start"); start.getStyleClass().add("primary"); start.setOnAction(e -> start());
+        end.setId("exam-end"); end.getStyleClass().add("danger"); end.setOnAction(e -> end());
         Button refresh = new Button("Làm mới lớp / đề"); refresh.setId("exam-organizer-refresh"); refresh.setOnAction(e -> reload());
         HBox splitControls = AppUi.toolbar(new Label("Sinh viên / ca"), capacity, split);
         HBox shiftControls = AppUi.toolbar(shift, shiftState); HBox.setHgrow(shift, Priority.ALWAYS);
@@ -74,7 +77,7 @@ final class ExamOrganizer extends BorderPane {
         status.setWrapText(true); status.setMinWidth(0); status.setMaxWidth(Double.MAX_VALUE);
         VBox examControls = new VBox(10, new Label("Đề thi"), exam,
                 AppUi.toolbar(new Label("Số mã đề"), variantCount),
-                AppUi.toolbar(prepare, start, AppUi.spacer(), refresh), status);
+                AppUi.toolbar(prepare, start, end), AppUi.toolbar(AppUi.spacer(), refresh), status);
         classControls.setMinWidth(0); examControls.setMinWidth(0);
         classControls.setPrefWidth(480); examControls.setPrefWidth(480);
         HBox.setHgrow(classControls, Priority.ALWAYS); HBox.setHgrow(examControls, Priority.ALWAYS);
@@ -88,6 +91,22 @@ final class ExamOrganizer extends BorderPane {
         roster.getColumns().add(UiSupport.column("Kết nối", 100, row -> session(row.code()) == null ? "Offline" : "Online"));
         roster.getColumns().add(UiSupport.column("Bài thi của ca này", 140,
                 row -> progress == null ? "Chưa mở thi" : progress.state(row.code(), exams.currentTime())));
+        var warningColumn = UiSupport.<ClassService.RosterStudent>column("Cảnh báo", 165,
+                row -> warnings.getOrDefault(row.code(), new ExamEventService.Summary(0, false, 0)).label());
+        warningColumn.setCellFactory(column -> new TableCell<>() {
+            final Hyperlink link = new Hyperlink();
+            { link.setStyle("-fx-padding: 0;"); link.setOnAction(e -> {
+                var student = getTableRow().getItem();
+                if (student != null && runningRound != null)
+                    ExamWarningJournal.show(getScene().getWindow(), exams.events(), server.get(), runningRound, student.code(), student.fullName());
+            }); }
+            @Override protected void updateItem(String value, boolean empty) {
+                super.updateItem(value, empty); setText(null); link.setText(empty ? "" : value);
+                link.setDisable(runningRound == null); setGraphic(empty ? null : link);
+                link.setStyle("-fx-padding: 0;" + (value != null && value.contains("Cần kiểm tra") ? "-fx-text-fill: #b13b28; -fx-font-weight: bold;" : ""));
+            }
+        });
+        roster.getColumns().add(warningColumn);
         roster.getColumns().add(UiSupport.column("IP", 140, row -> session(row.code()) == null ? "" : session(row.code()).ip()));
         TableColumn<ClassService.RosterStudent, Void> actions = new TableColumn<>("Xử lý"); actions.setPrefWidth(180);
         actions.setCellFactory(column -> new TableCell<>() {
@@ -114,6 +133,7 @@ final class ExamOrganizer extends BorderPane {
             if (deadlineMillis > 0 && exams.currentTime().toEpochMilli() >= deadlineMillis) {
                 status.setText("Ca #" + runningRound + " đã hết giờ. Mở Kết quả để xem điểm."); deadlineMillis = 0;
                 showShiftState();
+                updateActions();
             }
         }));
         deadlineWatcher.setCycleCount(javafx.animation.Timeline.INDEFINITE); deadlineWatcher.play();
@@ -125,7 +145,7 @@ final class ExamOrganizer extends BorderPane {
                 ? "Lớp có " + group.getValue().studentCount() + " sinh viên · Chuẩn bị ca để xem danh sách"
                 : roster.getItems().size() + " sinh viên trong danh sách · " + online + " đã kết nối"); updateActions();
     }
-    private void invalidatePreparation() { version++; progress = null; prepared = false; roster.getItems().clear(); refreshConnections(); status.setText("Chuẩn bị lại sau khi đổi lớp, ca hoặc đề."); updateActions(); }
+    private void invalidatePreparation() { version++; progress = null; warnings = java.util.Map.of(); runningRound = null; deadlineMillis = 0; prepared = false; roster.getItems().clear(); refreshConnections(); status.setText("Chuẩn bị lại sau khi đổi lớp, ca hoặc đề."); updateActions(); }
     private void refreshProgress() {
         if (disposed || busy || progressLoading || roster.getItems().isEmpty() || group.getValue() == null) return;
         long request = version;
@@ -133,15 +153,24 @@ final class ExamOrganizer extends BorderPane {
         boolean checkingPreparation = prepared;
         List<ClassService.RosterStudent> expected = List.copyOf(roster.getItems());
         progressLoading = true;
-        record Checked(java.util.Optional<ExamService.RoundProgress> progress, List<ClassService.RosterStudent> rows) {}
-        UiSupport.async("exam-roster-progress", () -> new Checked(exams.roundProgress(classId, shiftId),
-                checkingPreparation ? shiftId == null ? classes.roster(classId) : shifts.roster(classId, shiftId) : null), result -> {
+        record Checked(java.util.Optional<ExamService.RoundProgress> progress, List<ClassService.RosterStudent> rows,
+                       java.util.Map<String, ExamEventService.Summary> warnings) {}
+        UiSupport.async("exam-roster-progress", () -> {
+            var progress = exams.roundProgress(classId, shiftId);
+            return new Checked(progress, checkingPreparation ? shiftId == null ? classes.roster(classId) : shifts.roster(classId, shiftId) : null,
+                    progress.isEmpty() ? java.util.Map.of() : exams.events().summaries(progress.get().roundId()));
+        }, result -> {
             progressLoading = false;
             if (disposed || request != version) return;
             if (checkingPreparation && !new java.util.HashSet<>(expected).equals(new java.util.HashSet<>(result.rows()))) {
                 invalidatePreparation(); status.setText("Danh sách thi đã thay đổi. Bấm Chuẩn bị ca thi để kiểm tra lại."); return;
             }
-            progress = result.progress().orElse(null); roster.refresh(); showShiftState();
+            progress = result.progress().orElse(null);
+            warnings = result.warnings();
+            runningRound = progress == null ? null : progress.roundId();
+            deadlineMillis = progress == null || !exams.currentTime().isBefore(progress.deadline())
+                    ? 0 : progress.deadline().toEpochMilli();
+            roster.refresh(); showShiftState(); updateActions();
         }, ex -> {
             progressLoading = false;
             if (!disposed && request == version) status.setText("Chưa cập nhật được trạng thái bài thi: " + ex.getMessage());
@@ -153,7 +182,7 @@ final class ExamOrganizer extends BorderPane {
         exam.getSelectionModel().selectFirst();
     }
     void reload() {
-        if (disposed) return; long request = ++version; busy = true; updateActions();
+        if (disposed) return; long request = ++version; busy = true; runningRound = null; warnings = java.util.Map.of(); deadlineMillis = 0; updateActions();
         Long oldClass = group.getValue() == null ? null : group.getValue().id();
         record Options(List<ClassInfo> groups, List<ExamSummary> templates) {}
         UiSupport.async("exam-organizer-options", () -> new Options(classes.list(), exams.listExams()), options -> {
@@ -185,6 +214,7 @@ final class ExamOrganizer extends BorderPane {
             status.setText(prepared ? "Sẵn sàng bắt đầu thi."
                     : opened ? "Ca đã mở, danh sách đã chốt. Sinh viên thêm vào lớp sau đó chờ lượt thi tiếp theo."
                     : "Lớp chưa có sinh viên. Nhập CSV trong Lớp & sinh viên trước.");
+            refreshProgress();
         }, this::failed);
     }
     private void start() {
@@ -208,6 +238,28 @@ final class ExamOrganizer extends BorderPane {
         split.setDisable(busy || group.getValue() == null);
         prepare.setDisable(busy || group.getValue() == null || exam.getValue() == null);
         start.setDisable(busy || !prepared || server.get() == null || !server.get().isRunning());
+        end.setDisable(busy || runningRound == null || deadlineMillis <= exams.currentTime().toEpochMilli()
+                || server.get() == null || !server.get().isRunning());
+    }
+    private void end() {
+        if (end.isDisabled()) return;
+        Long roundId = runningRound;
+        ExamServer currentServer = server.get();
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION);
+        confirmation.initOwner(getScene().getWindow()); AppUi.desktopStyle(confirmation.getDialogPane());
+        confirmation.getDialogPane().setId("exam-end-confirmation");
+        confirmation.setTitle("Dừng bài thi"); confirmation.setHeaderText("Kết thúc ca #" + roundId + " ngay bây giờ?");
+        confirmation.setContentText("Thu và chấm các đáp án Server đã nhận. Sinh viên chưa vào bài sẽ được ghi vắng. Không thể tiếp tục ca này sau khi dừng.");
+        ((Button) confirmation.getDialogPane().lookupButton(ButtonType.OK)).setText("Dừng và chấm bài");
+        ((Button) confirmation.getDialogPane().lookupButton(ButtonType.CANCEL)).setText("Hủy");
+        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+        version++; busy = true; prepared = false; updateActions();
+        UiSupport.async("end-lan-exam", () -> { currentServer.endExam(roundId); return true; }, done -> {
+            if (disposed) return;
+            busy = false; deadlineMillis = 0; updateActions();
+            status.setText("Đã dừng ca #" + roundId + ". Bài đã nhận đang được chấm; xem điểm tại Kết quả.");
+            announce.accept(status.getText()); refreshProgress();
+        }, this::failed);
     }
     private void showShiftState() {
         var selected = shift.getValue();

@@ -154,6 +154,22 @@ public class ExamServer {
         return new Publication(exam, notifyExamAvailability());
     }
 
+    public void endExam(Long roundId) {
+        attemptGate.writeLock().lock();
+        try {
+            if (!running) throw new IllegalStateException("Server đã dừng.");
+            examService.endExam(roundId);
+            if (java.util.Objects.equals(publishedExamId, roundId)) {
+                publishedExamId = null;
+                publishedDeadline = 0;
+            }
+        } finally { attemptGate.writeLock().unlock(); }
+        // Timely frames already queued are drained before the expiry worker grades.
+        examService.finalizeExpiredAttempts();
+        for (ClientSession session : registry.allSessions()) session.getHandler().refreshExpiredAttempt();
+        notifyExamAvailability();
+    }
+
     private void clearExpiredOffer() {
         boolean expired = false;
         attemptGate.writeLock().lock();
@@ -209,6 +225,23 @@ public class ExamServer {
         ClientSession session = registry.find(studentCode);
         if (session == null || !session.getHandler().warnViolation(reason.strip()))
             throw new IllegalStateException("Sinh viên không còn online.");
+        if (session.getExamId() != null) examService.events().reminder(session.getExamId(), studentCode, reason);
+    }
+
+    public void remindExam(Long roundId, String studentCode, String reason) {
+        ClientSession session = registry.find(studentCode);
+        if (!running || session == null || !java.util.Objects.equals(roundId, session.getExamId())
+                || session.getStatus() != ClientStatus.DOING_EXAM)
+            throw new IllegalStateException("Sinh viên không đang làm ca này hoặc đã offline.");
+        // Validate the teacher and round before sending anything to the Client.
+        examService.events().reminder(roundId, studentCode, reason);
+        if (!session.getHandler().warnViolation(reason.strip())) throw new IllegalStateException("Sinh viên vừa mất kết nối.");
+    }
+
+    public boolean isDoingExam(Long roundId, String code) {
+        ClientSession session = registry.find(code);
+        return running && session != null && session.getStatus() == ClientStatus.DOING_EXAM
+                && java.util.Objects.equals(roundId, session.getExamId());
     }
 
     public void lockAccount(String studentCode, String reason) {

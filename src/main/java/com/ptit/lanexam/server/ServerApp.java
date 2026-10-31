@@ -54,8 +54,6 @@ public class ServerApp extends Application {
     private AuthService authService;
     private Label statusLabel;
     private Label addressLabel;
-    private Button startButton;
-    private Button stopButton;
     private Button resultsButton;
     private Button questionBankButton;
     private Button lockedAccountsButton;
@@ -140,6 +138,7 @@ public class ServerApp extends Application {
         classService = new ClassService(entityManagers, identity.id());
         authService = new AuthService(entityManagers, teacher.id());
         showWorkspace();
+        startServer();
     }
 
     private void showWorkspace() {
@@ -160,23 +159,11 @@ public class ServerApp extends Application {
         passwordButton.getStyleClass().add("small");
         logoutButton.getStyleClass().add("small");
 
-        startButton = new Button("Khởi động Server");
-        startButton.setId("server-start");
-        startButton.getStyleClass().add("primary");
-        stopButton = new Button("Dừng Server");
-        stopButton.setId("server-stop");
-        stopButton.getStyleClass().add("danger");
-
         resultsButton = navButton("results", "Kết quả");
         questionBankButton = navButton("bank", "Ngân hàng câu hỏi");
         lockedAccountsButton = new Button("Mở khóa SV");
         lockedAccountsButton.setOnAction(e -> LockedAccountManager.show(mainStage, authService));
         lockedAccountsButton.setId("manage-locked-accounts");
-        stopButton.setDisable(true);
-
-        startButton.setOnAction(e -> startServer());
-        stopButton.setOnAction(e -> stopServer());
-
         Button room = navButton("room", "Tổ chức thi");
         Button classes = navButton("classes", "Lớp & sinh viên");
         Region sidebarSpace = new Region();
@@ -191,7 +178,7 @@ public class ServerApp extends Application {
         sidebar.setMinWidth(185);
         sidebar.getStyleClass().add("sidebar");
 
-        HBox topbar = AppUi.toolbar(connectionState, startButton, stopButton, addressLabel, AppUi.spacer(), teacherLabel);
+        HBox topbar = AppUi.toolbar(connectionState, addressLabel, AppUi.spacer(), teacherLabel);
         topbar.getStyleClass().add("topbar");
         pageHost = new BorderPane();
         BorderPane workspace = new BorderPane(pageHost);
@@ -277,7 +264,6 @@ public class ServerApp extends Application {
         long version = workspaceVersion;
         ExamService currentExams = examService;
         AuthService currentAuth = authService;
-        startButton.setDisable(true);
         logoutButton.setDisable(true);
         statusLabel.setText("Đang khởi động database và server...");
         connectionState.setText("Đang kết nối...");
@@ -303,7 +289,6 @@ public class ServerApp extends Application {
                     statusLabel.setText("Server đang chạy tại cổng " + candidate.getPort());
                     connectionState.setText("Server đang chạy • " + candidate.getPort());
                     addressLabel.setText(connectionInfo);
-                    stopButton.setDisable(false);
                     resultsButton.setDisable(false);
                     questionBankButton.setDisable(false);
                     lockedAccountsButton.setDisable(false);
@@ -313,7 +298,6 @@ public class ServerApp extends Application {
                 Platform.runLater(() -> {
                     if (version != workspaceVersion) return;
                     logoutButton.setDisable(false);
-                    startButton.setDisable(false);
                     statusLabel.setText("Khởi động thất bại");
                     connectionState.setText("Chưa kết nối");
                     showError("Không thể khởi động Server", ex.getMessage());
@@ -364,10 +348,6 @@ public class ServerApp extends Application {
         });
     }
 
-    private void stopServer() {
-        changeSession(false);
-    }
-
     private void closeServerWindow() {
         if (closePending) return;
         closePending = true;
@@ -389,15 +369,15 @@ public class ServerApp extends Application {
         });
     }
 
-    private void logoutTeacher() { changeSession(true); }
+    private void logoutTeacher() { changeSession(); }
 
-    private void changeSession(boolean logout) {
+    private void changeSession() {
         long version = workspaceVersion;
         ExamServer currentServer = server;
         ExamService currentExams = examService;
         javafx.scene.Parent workspace = mainStage.getScene().getRoot();
         workspace.setDisable(true);
-        logoutButton.setDisable(true); stopButton.setDisable(true); startButton.setDisable(true);
+        logoutButton.setDisable(true);
         UiSupport.async("teacher-session-change", () -> {
             if (currentServer != null && currentServer.isRunning()) currentServer.stopIfIdle();
             else currentExams.ensureCanStop();
@@ -406,20 +386,16 @@ public class ServerApp extends Application {
             if (version != workspaceVersion) return;
             workspace.setDisable(false);
             markServerStopped(); server = null;
-            if (logout) {
-                workspaceVersion++;
-                disposePages();
-                Window.getWindows().stream().filter(window -> window instanceof Stage child && child != mainStage && child.getOwner() == mainStage)
-                        .map(window -> (Stage) window).toList().forEach(Stage::close);
-                teacher = null; rows.clear(); showTeacherLogin();
-            }
+            workspaceVersion++;
+            disposePages();
+            Window.getWindows().stream().filter(window -> window instanceof Stage child && child != mainStage && child.getOwner() == mainStage)
+                    .map(window -> (Stage) window).toList().forEach(Stage::close);
+            teacher = null; rows.clear(); showTeacherLogin();
         }, ex -> {
             if (version != workspaceVersion) return;
             workspace.setDisable(false);
             logoutButton.setDisable(false);
-            boolean running = currentServer != null && currentServer.isRunning();
-            startButton.setDisable(running); stopButton.setDisable(!running);
-            showError("Chưa thể " + (logout ? "đổi giáo viên" : "dừng Server"), ex.getMessage());
+            showError("Chưa thể đăng xuất", ex.getMessage());
         });
     }
 
@@ -439,9 +415,7 @@ public class ServerApp extends Application {
         logoutButton.setDisable(false);
         statusLabel.setText("Server đã dừng");
         connectionState.setText("Chưa kết nối");
-        addressLabel.setText("IP Server sẽ hiển thị khi khởi động Server.");
-        startButton.setDisable(false);
-        stopButton.setDisable(true);
+        addressLabel.setText("");
     }
 
     private void disposePages() {

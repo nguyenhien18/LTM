@@ -29,6 +29,8 @@ public class ExamService {
     private final Supplier<EntityManager> entityManagers;
     private final TeacherScope scope;
     private final Clock clock;
+    private final ExamEventService events;
+    public ExamEventService events() { return events; }
 
     private final Object receiptLock = new Object();
     private final Set<RequestReceipt> pendingRequests = new java.util.HashSet<>();
@@ -77,7 +79,7 @@ public class ExamService {
             if (deadline != null && clock.instant().isBefore(deadline)) {
                 int seconds = remainingSeconds(deadline);
                 throw new IllegalStateException("Ca thi đang diễn ra, còn " + (seconds / 60) + " phút " + (seconds % 60)
-                        + " giây. Chưa thể dừng Server, đóng cửa sổ hoặc đổi giáo viên.");
+                        + " giây. Kết thúc ca bằng Dừng bài thi trước khi đóng cửa sổ hoặc đăng xuất.");
             }
         }
         if (hasOpenAttempts()) throw new IllegalStateException("Còn sinh viên đang làm bài, kể cả sinh viên đã mất kết nối.");
@@ -98,6 +100,7 @@ public class ExamService {
         this(entityManagers, teacherId, Clock.systemUTC());
     }
     public ExamService(Supplier<EntityManager> entityManagers, Long teacherId, Clock clock) {
+        events = new ExamEventService(entityManagers, teacherId, clock);
         this.entityManagers = entityManagers;
         this.scope = new TeacherScope(teacherId);
         this.clock = clock;
@@ -341,7 +344,7 @@ public class ExamService {
                     .setParameter("shift", shift).getSingleResult() > 0)
                 throw new IllegalStateException("Ca này đã mở thi. Chọn ca tiếp theo; ca đã thi giữ nguyên đề, danh sách và kết quả.");
             if (current != null && current.getDeadlineAt() != null && clock.instant().isBefore(current.getDeadlineAt()))
-                throw new IllegalStateException("Ca thi đang diễn ra. Chờ hết giờ và chấm xong trước khi mở đề khác.");
+                throw new IllegalStateException("Ca thi đang diễn ra. Chờ hết giờ hoặc dùng Dừng bài thi và chờ chấm xong trước khi mở đề khác.");
             long unfinished = em.createQuery("select count(a) from ExamAttempt a where a.submittedAt is null and " + scope.predicate("a.exam"), Long.class)
                     .getSingleResult();
             if (unfinished > 0) throw new IllegalStateException("Đang chấm các bài của ca cũ. Hãy chờ hoàn tất trước khi mở ca mới.");
@@ -651,6 +654,29 @@ public class ExamService {
             throw e;
         } finally {
             em.close();
+        }
+    }
+
+    /** End only this teacher's selected round; keep its roster, variants and saved answers. */
+    public void endExam(Long roundId) {
+        if (roundId == null) throw new IllegalArgumentException("Chưa chọn ca đang thi.");
+        try (EntityManager em = entityManagers.get()) {
+            EntityTransaction tx = em.getTransaction();
+            try {
+                tx.begin();
+                if (scope.teacherId() != null) em.find(Teacher.class, scope.teacherId(), LockModeType.PESSIMISTIC_WRITE);
+                Exam round = em.find(Exam.class, roundId, LockModeType.PESSIMISTIC_WRITE);
+                scope.require(round);
+                if (round.getTemplateExamId() == null || !round.isActive() || round.getDeadlineAt() == null)
+                    throw new IllegalStateException("Ca thi này không đang mở.");
+                round.endAt(clock.instant());
+                em.createQuery("update ExamAttempt a set a.deadlineAt = :deadline where a.exam = :round and a.submittedAt is null and a.deadlineAt > :deadline")
+                        .setParameter("deadline", round.getDeadlineAt()).setParameter("round", round).executeUpdate();
+                tx.commit();
+            } catch (RuntimeException ex) {
+                if (tx.isActive()) tx.rollback();
+                throw ex;
+            }
         }
     }
 
