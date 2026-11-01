@@ -38,6 +38,10 @@
     -fx-background-color: white; -fx-border-color: #c6c8ca; -fx-background-radius: 2; -fx-border-radius: 2;
 }
 .desktop-ui .text-field { -fx-padding: 6 8; }
+.desktop-ui .round-setting:disabled,
+.desktop-ui .round-setting:disabled .list-cell,
+.desktop-ui .round-setting:disabled .text-field { -fx-opacity: 1; }
+.desktop-ui .round-setting:disabled { -fx-background-color: #eeeeee; }
 .desktop-ui .text-area .content { -fx-background-radius: 0; }
 .desktop-ui .table-view { -fx-background-color: white; -fx-border-color: #bfc2c5; -fx-background-radius: 0; -fx-border-radius: 0; -fx-padding: 0; }
 .desktop-ui .table-view .column-header-background, .desktop-ui .table-view .column-header, .desktop-ui .table-view .filler { -fx-background-color: #dedfe0; }

@@ -210,7 +210,8 @@ public class ExamService {
         }
     }
 
-    public record RoundProgress(Long roundId, Instant deadline, Map<String, String> states, Map<String, String> variantCodes) {
+    public record RoundProgress(Long roundId, Instant deadline, Map<String, String> states, Map<String, String> variantCodes,
+                                ExamSummary template, int variantCount) {
         public RoundProgress { states = Map.copyOf(states); variantCodes = Map.copyOf(variantCodes); }
         public String variantCode(String code) { return variantCodes.getOrDefault(code, "—"); }
         public String state(String code, Instant now) {
@@ -245,7 +246,11 @@ public class ExamService {
                 if (candidates == null) candidates = RoundRoster.candidates(em, round.getCourseClass(), round.getShift());
                 candidates.forEach(student -> variantCodes.put(student.code(), "Gốc"));
             }
-            return Optional.of(new RoundProgress(round.getId(), round.getDeadlineAt(), states, variantCodes));
+            // Describe the saved round, even if its source template was changed later.
+            var template = new ExamSummary(round.getTemplateExamId(), round.getTitle(), round.getDurationMinutes(),
+                    round.getQuestions().size(), round.isActive(), round.getSubjectName());
+            return Optional.of(new RoundProgress(round.getId(), round.getDeadlineAt(), states, variantCodes,
+                    template, bundle == null ? 1 : bundle.variants().size()));
         }
     }
 
@@ -730,7 +735,7 @@ public class ExamService {
         List<Long> ids;
         try {
             ids = em.createQuery("select a.id from ExamAttempt a where a.submittedAt is null "
-                            + "and a.deadlineAt <= :now", Long.class)
+                            + "and " + scope.predicate("a.exam") + " and a.deadlineAt <= :now", Long.class)
                     .setParameter("now", clock.instant()).getResultList();
         } finally {
             em.close();
@@ -744,6 +749,8 @@ public class ExamService {
         try {
             tx.begin();
             ExamAttempt attempt = em.find(ExamAttempt.class, id, LockModeType.PESSIMISTIC_WRITE);
+            // Pending TCP receipts belong to this service; only its owner's attempts can be finalized here.
+            if (attempt != null) scope.require(attempt.getExam());
             if (attempt != null && hasPendingAnswers(attempt)) {
                 tx.commit();
                 return;

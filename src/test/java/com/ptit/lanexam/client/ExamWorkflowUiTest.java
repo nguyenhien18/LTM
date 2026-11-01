@@ -908,6 +908,150 @@ class ExamWorkflowUiTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void organizerCanRetryAfterReducingAnUnsupportedVariantCountWithoutRefreshing() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:variant_retry_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gvretry", "Giảng viên", "Matkhau123!");
+            var bank = new QuestionBankService(factory::createEntityManager, teacher.id());
+            var subject = bank.createSubject("Mạng");
+            var classes = new ClassService(factory::createEntityManager, teacher.id());
+            var group = classes.create("RETRY", "Lớp thử lại", "HK1", subject.id());
+            classes.importRoster(group.id(), RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,RT001,Sinh viên một,12/05/2003,C1"));
+            var question = bank.createQuestion(new BankQuestionDraft(subject.id(), 1,
+                    new ExamDraft.QuestionDraft("Chọn phương án đúng?", QuestionType.MULTIPLE_CHOICE,
+                            "TCP", "UDP", "IP", "Cả A và B", "A")));
+            var exams = new ExamService(factory::createEntityManager, teacher.id());
+            exams.createExamFromBank(new BankExamDraft("Đề chỉ tạo được một mã", 20, subject.id(), List.of(question.id())));
+            var app = new ServerApp(factory::createEntityManager, () -> {}, 0);
+            Stage stage = fx(() -> { var s = new Stage(); app.start(s); return s; });
+            try {
+                awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+                loginTeacherInUi(stage, "gvretry");
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled());
+                fx(() -> {
+                    assertEquals(4, ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValue());
+                    ((Button) stage.getScene().lookup("#exam-start")).fire(); return null;
+                });
+                awaitFx(() -> ((Label) stage.getScene().lookup("#exam-round-status")).getText().contains("chỉ tạo được 1 mã"));
+                assertTrue(exams.recoverPublishedExam().isEmpty(), "An unsupported layout must not create or start a round");
+                fx(() -> {
+                    assertFalse(stage.getScene().lookup("#exam-start").isDisabled(), "A rejected configuration must allow another start");
+                    ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValueFactory().setValue(1);
+                    ((Button) stage.getScene().lookup("#exam-start")).fire(); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-end").isDisabled() && progressCell(stage, 0, "Mã đề").equals("Gốc"));
+                var progress = exams.roundProgress(group.id(), null).orElseThrow();
+                assertEquals(1, progress.variantCount());
+                assertEquals(1, exams.listRoundResults().size(), "Retry must create exactly one round roster");
+                fx(() -> { snapshot(stage.getScene().getRoot(), "organizer-retry-one-variant-fixed"); return null; });
+            } finally { fx(() -> { app.stop(); stage.close(); return null; }); }
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void organizerShowsSavedConfigurationForOpenedRoundsAndUnlocksUnopenedShiftsAndClasses() throws Exception {
+        try (var factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
+                "jakarta.persistence.jdbc.driver", "org.h2.Driver",
+                "jakarta.persistence.jdbc.url", "jdbc:h2:mem:saved_config_ui_" + UUID.randomUUID() + ";MODE=MySQL",
+                "jakarta.persistence.jdbc.user", "sa", "jakarta.persistence.jdbc.password", "",
+                "hibernate.hbm2ddl.auto", "create-drop", "hibernate.dialect", "org.hibernate.dialect.H2Dialect"))) {
+            var teacher = new TeacherAccountService(factory::createEntityManager).create("gvconfig", "Giảng viên", "Matkhau123!");
+            var bank = new QuestionBankService(factory::createEntityManager, teacher.id());
+            var subject = bank.createSubject("Mạng");
+            var classes = new ClassService(factory::createEntityManager, teacher.id());
+            var other = classes.create("OTHER", "Lớp khác", "HK1", subject.id());
+            var group = classes.create("CONFIG", "Lớp kiểm tra cấu hình", "HK1", subject.id());
+            var students = RosterCsv.parse("STT,MSV,Họ và tên,Ngày sinh,Lớp\n1,CF001,Sinh viên một,12/05/2003,C1\n2,CF002,Sinh viên hai,12/05/2003,C1");
+            classes.importRoster(other.id(), students); classes.importRoster(group.id(), students);
+            var q1 = bank.createQuestion(new BankQuestionDraft(subject.id(), 1, new ExamDraft.QuestionDraft(
+                    "Giao thức tin cậy?", QuestionType.MULTIPLE_CHOICE, "TCP", "UDP", "IP", "ICMP", "A")));
+            var q2 = bank.createQuestion(new BankQuestionDraft(subject.id(), 2, new ExamDraft.QuestionDraft(
+                    "IPv4 có bao nhiêu bit?", QuestionType.MULTIPLE_CHOICE, "16", "32", "64", "128", "B")));
+            var exams = new ExamService(factory::createEntityManager, teacher.id());
+            var a = exams.createExamFromBank(new BankExamDraft("Đề A", 20, subject.id(), List.of(q1.id())));
+            var b = exams.createExamFromBank(new BankExamDraft("Đề B mới nhất", 30, subject.id(), List.of(q1.id(), q2.id())));
+            var shifts = new com.ptit.lanexam.server.service.ExamShiftService(factory::createEntityManager, teacher.id()).split(group.id(), 1);
+            var firstRound = exams.activateExam(a.id(), group.id(), shifts.getFirst().id(), 1);
+            long originalDeadline = firstRound.getDeadlineEpochMillis();
+            var app = new ServerApp(factory::createEntityManager, () -> {}, 0);
+            Stage stage = fx(() -> { var s = new Stage(); app.start(s); return s; });
+            try {
+                awaitFx(() -> stage.getScene().lookup("#teacher-login-submit") != null);
+                loginTeacherInUi(stage, "gvconfig");
+                awaitFx(() -> !stage.getScene().lookup("#exam-end").isDisabled());
+                assertOpenedConfiguration(stage, a.id(), "Đề A", 1, 20, 1);
+                fx(() -> { ((Button) stage.getScene().lookup("#exam-organizer-refresh")).fire(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#exam-class").isDisabled());
+                assertOpenedConfiguration(stage, a.id(), "Đề A", 1, 20, 1);
+                assertEquals(originalDeadline, exams.getActiveExam().getDeadlineEpochMillis());
+
+                fx(() -> { ((ComboBox<?>) stage.getScene().lookup("#exam-shift")).getSelectionModel().selectLast(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled());
+                fx(() -> {
+                    var choices = (ComboBox<com.ptit.lanexam.server.service.ExamSummary>) stage.getScene().lookup("#exam-template");
+                    assertFalse(choices.isDisabled()); assertEquals(2, choices.getItems().size());
+                    choices.setValue(choices.getItems().stream().filter(t -> t.id().equals(b.id())).findFirst().orElseThrow()); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-class").isDisabled());
+                fx(() -> {
+                    ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValueFactory().setValue(4);
+                    ((ComboBox<?>) stage.getScene().lookup("#exam-shift")).getSelectionModel().selectFirst(); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-end").isDisabled());
+                assertOpenedConfiguration(stage, a.id(), "Đề A", 1, 20, 1);
+                Platform.runLater(() -> ((Button) stage.getScene().lookup("#exam-end")).fire());
+                awaitFx(() -> notice("#exam-end-confirmation") != null);
+                fx(() -> { ((Button) notice("#exam-end-confirmation").lookupButton(ButtonType.OK)).fire(); return null; });
+                awaitFx(() -> "Đã kết thúc".equals(((Label) stage.getScene().lookup("#exam-round-status")).getText()));
+                assertOpenedConfiguration(stage, a.id(), "Đề A", 1, 20, 1);
+
+                fx(() -> { ((ComboBox<?>) stage.getScene().lookup("#exam-shift")).getSelectionModel().selectLast(); return null; });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled());
+                fx(() -> {
+                    var choices = (ComboBox<com.ptit.lanexam.server.service.ExamSummary>) stage.getScene().lookup("#exam-template");
+                    choices.setValue(choices.getItems().stream().filter(t -> t.id().equals(b.id())).findFirst().orElseThrow()); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled());
+                fx(() -> {
+                    assertFalse(stage.getScene().lookup("#exam-variant-count").isDisabled());
+                    ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValueFactory().setValue(4);
+                    ((Button) stage.getScene().lookup("#exam-start")).fire(); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-end").isDisabled());
+                assertOpenedConfiguration(stage, b.id(), "Đề B mới nhất", 2, 30, 4);
+                fx(() -> { snapshot(stage.getScene().getRoot(), "organizer-saved-round-configuration-fixed"); return null; });
+                fx(() -> {
+                    var choices = (ComboBox<com.ptit.lanexam.server.service.ClassInfo>) stage.getScene().lookup("#exam-class");
+                    choices.setValue(choices.getItems().stream().filter(c -> c.id().equals(other.id())).findFirst().orElseThrow()); return null;
+                });
+                awaitFx(() -> !stage.getScene().lookup("#exam-start").isDisabled());
+                fx(() -> {
+                    assertFalse(stage.getScene().lookup("#exam-template").isDisabled());
+                    assertFalse(stage.getScene().lookup("#exam-variant-count").isDisabled()); return null;
+                });
+                assertEquals(4, exams.roundProgress(group.id(), shifts.getLast().id()).orElseThrow().variantCount());
+                assertEquals(1, exams.roundProgress(group.id(), shifts.getFirst().id()).orElseThrow().variantCount());
+            } finally { fx(() -> { app.stop(); stage.close(); return null; }); }
+        }
+    }
+
+    private static void assertOpenedConfiguration(Stage stage, Long id, String title, int questions, int minutes, int variants) throws Exception {
+        fx(() -> {
+            var choices = (ComboBox<com.ptit.lanexam.server.service.ExamSummary>) stage.getScene().lookup("#exam-template");
+            assertTrue(choices.isDisabled());
+            assertEquals(id, choices.getValue().id()); assertEquals(title, choices.getValue().title());
+            assertEquals(questions, choices.getValue().questionCount()); assertEquals(minutes, choices.getValue().durationMinutes());
+            assertTrue(stage.getScene().lookup("#exam-variant-count").isDisabled());
+            assertEquals(variants, ((Spinner<Integer>) stage.getScene().lookup("#exam-variant-count")).getValue()); return null;
+        });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void organizerPreparesBeforeStartingAndStudentAutomaticallyReceivesOwnExamAndResumes() throws Exception {
         try (EntityManagerFactory factory = Persistence.createEntityManagerFactory("lan-exam-pu", Map.of(
                 "jakarta.persistence.jdbc.driver", "org.h2.Driver",

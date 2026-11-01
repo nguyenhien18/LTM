@@ -135,6 +135,10 @@ Ngày sinh có thể chọn bằng lịch hoặc gõ theo `dd/MM/yyyy`. Nếu đ
 7. Kiểm tra danh sách/kết nối rồi bấm **Bắt đầu thi**. Đây là lúc đồng hồ chung bắt đầu; xem danh sách chưa tính giờ. Khi ca đang chạy, nút **Dừng bài thi** thay cho nút bắt đầu.
 8. Theo dõi đến hết giờ hoặc bấm **Dừng bài thi** để kết thúc sớm; vào **Kết quả** để lọc và xuất CSV. Chờ ca trước kết thúc và chấm xong mới mở ca tiếp theo.
 
+Ca đã mở hiển thị đúng đề và số mã đã lưu; hai ô này được khóa khi xem ca đó. Chọn ca chưa mở để cấu hình đề mới. Nếu cấu hình số mã không tạo được, có thể sửa số mã rồi bấm Bắt đầu thi lại, không cần Làm mới.
+
+Tác vụ tự chấm hết giờ chỉ xử lý bài thuộc giảng viên đang đăng nhập, kể cả khi nhiều Server của các giảng viên khác nhau dùng chung database.
+
 **Dừng bài thi** có bước xác nhận và chỉ áp dụng ca đang xem. Hệ thống chốt hạn ngay, ngừng nhận người mới vào ca, chấm đáp án đã nhận cho cả người online và offline, giữ nguyên bài đã nộp và ghi vắng người chưa vào bài. Các đáp án đã nhận trước thời điểm dừng được xử lý trước khi chấm; dữ liệu gửi muộn không thay điểm. Kết nối Server vẫn hoạt động để tổ chức ca tiếp theo. Đây là kết thúc ca, không phải tạm dừng rồi tiếp tục; khi đăng xuất hoặc đóng cửa sổ giảng viên thì Server mới đóng kết nối.
 
 Bảng **Kết quả** và CSV có đủ thí sinh theo danh sách ca đã chốt, kèm trạng thái Chưa vào bài / Đang làm / Đang chấm / Đã nộp / Hết giờ — đã chấm / Vắng thi. Chỉ kết luận vắng sau hạn và khi chưa từng vào bài. Người vắng hoặc chưa có kết quả để trống điểm, số câu đúng và thời gian nộp; bài đã chấm được 0 vẫn ghi `0.00`. Sinh viên nhập bổ sung sau lúc mở ca không được thêm vào báo cáo ca đó. Bản ghi tự chấm hết giờ được lưu riêng để phân biệt với nộp chủ động. Với ca cũ chưa lưu danh sách và không chia ca, chỉ khôi phục được các bài nộp đã có, không suy diễn danh sách vắng từ lớp hiện tại. Bấm Làm mới để cập nhật kết quả trước khi xuất.

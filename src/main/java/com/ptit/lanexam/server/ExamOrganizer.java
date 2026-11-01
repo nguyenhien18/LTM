@@ -46,6 +46,7 @@ final class ExamOrganizer extends BorderPane {
         AppUi.desktopStyle(this);
         this.classes = classes; this.exams = exams; this.shifts = shifts; this.server = server; this.sessions = sessions; this.announce = announce;
         group.setId("exam-class"); exam.setId("exam-template"); group.setPromptText("Chọn lớp / nhóm thi"); exam.setPromptText("Chọn đề đã lưu");
+        exam.getStyleClass().add("round-setting"); variantCount.getStyleClass().add("round-setting");
         group.setMaxWidth(Double.MAX_VALUE); exam.setMaxWidth(Double.MAX_VALUE);
         exam.setConverter(new javafx.util.StringConverter<>() {
             public String toString(ExamSummary e) { return e == null ? "" : e.title() + " · " + e.questionCount() + " câu · " + e.durationMinutes() + " phút"; }
@@ -174,6 +175,7 @@ final class ExamOrganizer extends BorderPane {
             runningRound = progress == null ? null : progress.roundId();
             deadlineMillis = progress == null || !exams.currentTime().isBefore(progress.deadline())
                     ? 0 : progress.deadline().toEpochMilli();
+            if (progress != null) showRoundConfiguration();
             roster.refresh(); showShiftState(); updateActions();
         }, ex -> {
             progressLoading = false;
@@ -185,6 +187,19 @@ final class ExamOrganizer extends BorderPane {
         Long oldExam = exam.getValue() == null ? null : exam.getValue().id();
         exam.getItems().setAll(templates.stream().filter(t -> selected != null && (t.subjectName() == null || t.subjectName().equals(selected.subjectName()))).toList());
         exam.setValue(exam.getItems().stream().filter(t -> t.id().equals(oldExam)).findFirst().orElse(exam.getItems().isEmpty() ? null : exam.getItems().getFirst()));
+    }
+    private void showRoundConfiguration() {
+        changingOptions = true;
+        try {
+            if (progress == null) filterTemplates();
+            else {
+                ExamSummary saved = progress.template();
+                if (!saved.equals(exam.getValue()) || exam.getItems().size() != 1) {
+                    exam.getItems().setAll(saved); exam.setValue(saved);
+                }
+                variantCount.getValueFactory().setValue(progress.variantCount());
+            }
+        } finally { changingOptions = false; }
     }
     void reload() {
         if (disposed) return; long request = ++version; busy = true; runningRound = null; warnings = java.util.Map.of(); deadlineMillis = 0; updateActions();
@@ -216,6 +231,7 @@ final class ExamOrganizer extends BorderPane {
             deadlineMillis = progress == null || !exams.currentTime().isBefore(progress.deadline()) ? 0 : progress.deadline().toEpochMilli();
             boolean opened = selectedShift != null && selectedShift.roundId() != null
                     || progress != null && exams.currentTime().isBefore(progress.deadline());
+            showRoundConfiguration();
             busy = false; roster.getItems().setAll(rows); prepared = !rows.isEmpty() && !opened; refreshConnections();
             showShiftState();
             refreshProgress();
@@ -228,22 +244,25 @@ final class ExamOrganizer extends BorderPane {
         record Started(ExamServer.Publication publication, List<ExamShiftService.ShiftInfo> shifts) {}
         int variants = variantCount.getValue();
         var preparedRoster = List.copyOf(roster.getItems());
+        // A rejected configuration leaves this roster available for another
+        // start, which still validates it inside the opening transaction.
         UiSupport.async("start-lan-exam", () -> new Started(server.get().openExam(templateId, classId, shiftId, variants, preparedRoster), shifts.list(classId)), opened -> {
             if (disposed) return; busy = false; prepared = false; updateActions();
             var publication = opened.publication(); setShifts(opened.shifts(), shiftId);
             runningRound = publication.exam().getId(); deadlineMillis = publication.exam().getDeadlineEpochMillis();
             showShiftState();
             announce.accept(status.getText()); refreshConnections(); refreshProgress();
-        }, ex -> { prepared = false; failed(ex); });
+        }, this::failed);
     }
     private void updateActions() {
-        group.setDisable(busy); exam.setDisable(busy); shift.setDisable(busy || shift.getItems().isEmpty()); capacity.setDisable(busy);
+        boolean opened = runningRound != null || shift.getValue() != null && shift.getValue().roundId() != null;
+        group.setDisable(busy); exam.setDisable(busy || opened); shift.setDisable(busy || shift.getItems().isEmpty()); capacity.setDisable(busy);
         split.setDisable(busy || group.getValue() == null);
         start.setDisable(busy || !prepared || exam.getValue() == null || server.get() == null || !server.get().isRunning());
         boolean running = runningRound != null && deadlineMillis > exams.currentTime().toEpochMilli();
         end.setVisible(running); end.setManaged(running);
         start.setVisible(!running); start.setManaged(!running);
-        variantCount.setDisable(busy || running || shift.getValue() != null && shift.getValue().roundId() != null);
+        variantCount.setDisable(busy || opened);
         end.setDisable(busy || runningRound == null || deadlineMillis <= exams.currentTime().toEpochMilli()
                 || server.get() == null || !server.get().isRunning());
     }
