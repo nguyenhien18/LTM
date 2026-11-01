@@ -3,7 +3,7 @@ $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $required = @(
     'README.md', 'INSTRUCTION.md', 'TOPICS.md', 'pom.xml',
     'run-server.bat', 'run-client.bat', 'start-mysql.bat',
-    'report/README.md',
+    'report/README.md', 'report/BAOCAOLAPTRINHMANG_10_14.docx',
     'statics/architecture.svg', 'statics/architecture.png',
     'statics/protocol.svg', 'statics/protocol.png', 'statics/PROTOCOL.md',
     'statics/protocol.puml', 'statics/DATA_MODEL.md', 'statics/REFERENCES.md',

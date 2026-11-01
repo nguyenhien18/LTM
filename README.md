@@ -31,7 +31,7 @@ Trong **Lớp & sinh viên**, gõ tên hoặc MSV vào ô tìm kiếm để lọ
 - Các máy kết nối được IP/cổng Server trong LAN; cho phép Java nhận TCP cổng **5000** qua firewall.
 - Lần build đầu cần tải thư viện Maven. Sau khi có đủ thư viện/runtime, lúc thi không cần Internet.
 
-Repository gồm mã nguồn, kiểm thử, cấu hình chạy và tài liệu phục vụ bộ nộp. Thư mục `report/` được giữ theo cấu trúc bài tập lớn; nội dung báo cáo chưa đưa lên GitHub. `statics/` chứa sơ đồ, dữ liệu demo và bằng chứng kiểm thử. Bản ZIP Client Windows được lưu trong `downloads/`; các thư mục build và đóng gói cục bộ vẫn được bỏ qua.
+Repository gồm mã nguồn, kiểm thử, cấu hình chạy và tài liệu phục vụ bộ nộp. [Báo cáo Word của nhóm](report/BAOCAOLAPTRINHMANG_10_14.docx) nằm trong `report/`. `statics/` chứa sơ đồ, dữ liệu demo và bằng chứng kiểm thử. Bản ZIP Client Windows được lưu trong `downloads/`; các thư mục build và đóng gói cục bộ vẫn được bỏ qua.
 
 ## Cấu trúc và tài liệu nộp bài
 
@@ -44,7 +44,8 @@ LAN_Exam_System/
 ├── run-server.bat / run-client.bat / start-mysql.bat
 ├── downloads/                  # ZIP Client Windows và mã SHA-256
 ├── report/
-│   └── README.md               # Giữ vị trí báo cáo; bổ sung bản nộp sau
+│   ├── BAOCAOLAPTRINHMANG_10_14.docx
+│   └── README.md               # Link tải và tài liệu kèm báo cáo
 ├── statics/
 │   ├── architecture.png / architecture.svg
 │   ├── protocol.png / protocol.svg

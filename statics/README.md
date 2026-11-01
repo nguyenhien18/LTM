@@ -1,5 +1,7 @@
 # Hình và tài liệu của dự án
 
+Báo cáo Word của nhóm nằm tại [report](../report/README.md). Các hình và dữ liệu dưới đây được lưu riêng để có thể xem, tải và đối chiếu với mã nguồn.
+
 | Nội dung | Hình PNG | Nguồn SVG |
 |---|---|---|
 | Kiến trúc Client–Server | [architecture.png](architecture.png) | [architecture.svg](architecture.svg) |
