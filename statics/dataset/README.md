@@ -2,6 +2,8 @@
 
 Đây là dữ liệu tổng hợp phục vụ kiểm thử/demo, không phải dữ liệu sinh viên thật.
 
+Bộ bổ sung có [10 CSV danh sách lớp và 10 Word câu hỏi](bo-du-lieu-mo-rong/README.md): tổng cộng 700 sinh viên và 2.460 câu thuộc 10 môn CNTT. Mỗi lớp 60–80 sinh viên, mỗi môn 200–300 câu. Các file cũ bên dưới được giữ nguyên.
+
 | File | Nội dung |
 |---|---|
 | sinh-vien-nhom-01-60.csv | 60 sinh viên, STT 1–60, MSV B23DCCN201–B23DCCN260 |

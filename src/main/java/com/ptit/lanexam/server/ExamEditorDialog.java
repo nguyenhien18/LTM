@@ -8,6 +8,7 @@ import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.Window;
@@ -75,9 +76,10 @@ public final class ExamEditorDialog {
         }
         Button draw = new Button("Lấy câu ngẫu nhiên"), replace = new Button("Đổi câu đang chọn");
         draw.setId("exam-random-draw"); replace.setId("exam-random-replace");
-        Label randomNote = AppUi.label("Lấy bộ mới thay danh sách câu đã chọn. Đổi câu giữ nguyên mức và bỏ qua câu đã có trong đề.", "muted");
         HBox quickControls = new HBox(18, matrix, draw);
-        TitledPane quick = new TitledPane("Tạo đề tự động theo mức", new VBox(8, quickControls, randomNote)); quick.setId("exam-quick-create"); quick.setExpanded(false);
+        quickControls.setAlignment(Pos.BOTTOM_LEFT);
+        draw.setMinWidth(Region.USE_PREF_SIZE);
+        TitledPane quick = new TitledPane("Tạo đề tự động theo mức", quickControls); quick.setId("exam-quick-create"); quick.setExpanded(false);
         draw.setOnAction(event -> {
             try {
                 if (bank.subject() == null) throw new IllegalArgumentException("Chọn môn thi trước.");
@@ -148,7 +150,6 @@ public final class ExamEditorDialog {
         up.setOnAction(event -> move(selected, chosen, -1));
         down.setOnAction(event -> move(selected, chosen, 1));
         Label bankHeading = new Label("Ngân hàng câu hỏi");
-        Label selectionHint = AppUi.label("Chọn môn và mức độ, tìm câu cần dùng rồi thêm vào đề.", "muted");
         VBox bankSection = new VBox(5, bankHeading, bank, add);
         bankSection.getStyleClass().add("surface");
         VBox.setVgrow(bank, Priority.ALWAYS);

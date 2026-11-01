@@ -16,12 +16,10 @@ final class ExamOrganizer extends BorderPane {
     private final ComboBox<ExamShiftService.ShiftInfo> shift = new ComboBox<>();
     private final Spinner<Integer> capacity = new Spinner<>(1, RosterCsv.MAX_ROWS, 30);
     private final Spinner<Integer> variantCount = new Spinner<>(1, 8, 4);
-    private final Button split = new Button("Chia ca theo STT");
-    private final Label shiftState = AppUi.label("", "muted");
+    private final Button split = new Button("Chia ca…");
     private final TableView<ClassService.RosterStudent> roster = new TableView<>();
-    private final Label status = AppUi.label("Chọn lớp và đề, kiểm tra danh sách rồi bắt đầu ca thi.", "muted");
+    private final Label status = AppUi.label("Chọn lớp để xem danh sách.", "muted");
     private final Label count = AppUi.label("", "muted");
-    private final Button prepare = new Button("Chuẩn bị ca thi");
     private final Button start = new Button("Bắt đầu thi");
     private final Button end = new Button("Dừng bài thi");
     private final ClassService classes;
@@ -54,34 +52,38 @@ final class ExamOrganizer extends BorderPane {
             public ExamSummary fromString(String s) { return null; }
         });
         group.valueProperty().addListener((o, old, value) -> {
-            if (!changingOptions) { invalidatePreparation(); filterTemplates(); loadShifts(); }
+            if (!changingOptions) {
+                invalidatePreparation(); changingOptions = true; filterTemplates(); changingOptions = false; loadShifts();
+            }
         });
-        exam.valueProperty().addListener((o, old, value) -> { if (!changingOptions) invalidatePreparation(); });
+        exam.valueProperty().addListener((o, old, value) -> { if (!changingOptions) { invalidatePreparation(); prepare(); } });
         shift.setId("exam-shift"); shift.setPromptText("Cả lớp · chưa chia ca"); shift.setMaxWidth(Double.MAX_VALUE);
         shift.setConverter(new javafx.util.StringConverter<>() {
             public String toString(ExamShiftService.ShiftInfo s) { return s == null ? "" : s.toString(); }
             public ExamShiftService.ShiftInfo fromString(String s) { return null; }
         });
-        shift.valueProperty().addListener((o, old, value) -> { if (!changingOptions) { invalidatePreparation(); showShiftState(); } });
+        shift.valueProperty().addListener((o, old, value) -> { if (!changingOptions) { invalidatePreparation(); prepare(); } });
         capacity.setId("exam-shift-capacity"); capacity.setEditable(true); capacity.setPrefWidth(100);
         variantCount.setId("exam-variant-count"); variantCount.setPrefWidth(80);
-        variantCount.valueProperty().addListener((o, old, value) -> { if (!changingOptions) invalidatePreparation(); });
         split.setId("exam-split"); split.setOnAction(e -> split());
-        prepare.setId("exam-prepare"); prepare.setOnAction(e -> prepare());
         start.setId("exam-start"); start.getStyleClass().add("primary"); start.setOnAction(e -> start());
         end.setId("exam-end"); end.getStyleClass().add("danger"); end.setOnAction(e -> end());
-        Button refresh = new Button("Làm mới lớp / đề"); refresh.setId("exam-organizer-refresh"); refresh.setOnAction(e -> reload());
-        HBox splitControls = AppUi.toolbar(new Label("Sinh viên / ca"), capacity, split);
-        HBox shiftControls = AppUi.toolbar(shift, shiftState); HBox.setHgrow(shift, Priority.ALWAYS);
-        VBox classControls = new VBox(10, new Label("Lớp và ca thi"), group, splitControls, shiftControls);
+        Button refresh = new Button("Làm mới"); refresh.setId("exam-organizer-refresh"); refresh.setOnAction(e -> reload());
+        HBox shiftControls = AppUi.toolbar(shift, split); HBox.setHgrow(shift, Priority.ALWAYS);
+        split.setMinWidth(Region.USE_PREF_SIZE);
+        GridPane fields = new GridPane(); fields.setHgap(24); fields.setVgap(12);
+        for (int i = 0; i < 2; i++) {
+            ColumnConstraints column = new ColumnConstraints(); column.setPercentWidth(50); column.setHgrow(Priority.ALWAYS);
+            fields.getColumnConstraints().add(column);
+        }
+        fields.add(new VBox(6, new Label("Lớp học phần"), group), 0, 0);
+        fields.add(new VBox(6, new Label("Ca thi"), shiftControls), 1, 0);
+        fields.add(new VBox(6, new Label("Đề thi"), exam), 0, 1);
+        fields.add(new VBox(6, new Label("Số mã đề"), variantCount), 1, 1);
+        group.setMinWidth(0); exam.setMinWidth(0); shift.setMinWidth(0);
         status.setWrapText(true); status.setMinWidth(0); status.setMaxWidth(Double.MAX_VALUE);
-        VBox examControls = new VBox(10, new Label("Đề thi"), exam,
-                AppUi.toolbar(new Label("Số mã đề"), variantCount),
-                AppUi.toolbar(prepare, start, end), AppUi.toolbar(AppUi.spacer(), refresh), status);
-        classControls.setMinWidth(0); examControls.setMinWidth(0);
-        classControls.setPrefWidth(480); examControls.setPrefWidth(480);
-        HBox.setHgrow(classControls, Priority.ALWAYS); HBox.setHgrow(examControls, Priority.ALWAYS);
-        VBox selection = AppUi.card(new HBox(22, classControls, examControls));
+        status.setId("exam-round-status"); HBox.setHgrow(status, Priority.ALWAYS);
+        VBox selection = AppUi.card(fields, AppUi.toolbar(status, AppUi.spacer(), refresh, start, end));
         roster.setId("exam-roster"); roster.setFixedCellSize(36); roster.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         var ordinalColumn = UiSupport.<ClassService.RosterStudent>column("STT", 60, r -> r.ordinal() == null ? "—" : r.ordinal().toString());
         ordinalColumn.setMinWidth(55); roster.getColumns().add(ordinalColumn);
@@ -126,13 +128,13 @@ final class ExamOrganizer extends BorderPane {
                 var row = getTableRow() == null ? null : getTableRow().getItem(); buttons.setDisable(row == null || session(row.code()) == null);
             }
         });
-        roster.getColumns().add(actions); roster.setPlaceholder(new Label("Bấm Chuẩn bị ca thi để kiểm tra danh sách sinh viên."));
+        roster.getColumns().add(actions); roster.setPlaceholder(new Label("Chưa có sinh viên trong danh sách."));
         VBox body = new VBox(14, selection, count, roster); VBox.setVgrow(roster, Priority.ALWAYS); setCenter(body);
         sessions.addListener(listener); reload();
         deadlineWatcher.getKeyFrames().add(new javafx.animation.KeyFrame(javafx.util.Duration.seconds(1), e -> {
             if (++progressTicks % 2 == 0) refreshProgress();
             if (deadlineMillis > 0 && exams.currentTime().toEpochMilli() >= deadlineMillis) {
-                status.setText("Ca #" + runningRound + " đã hết giờ. Mở Kết quả để xem điểm."); deadlineMillis = 0;
+                deadlineMillis = 0;
                 showShiftState();
                 updateActions();
             }
@@ -142,16 +144,14 @@ final class ExamOrganizer extends BorderPane {
     private ClientSessionInfo session(String code) { return sessions.stream().filter(s -> s.studentCode().equals(code)).findFirst().orElse(null); }
     private void refreshConnections() {
         roster.refresh(); long online = roster.getItems().stream().filter(s -> session(s.code()) != null).count();
-        count.setText(roster.getItems().isEmpty() && group.getValue() != null
-                ? "Lớp có " + group.getValue().studentCount() + " sinh viên · Chuẩn bị ca để xem danh sách"
-                : roster.getItems().size() + " sinh viên trong danh sách · " + online + " đã kết nối"); updateActions();
+        count.setText(roster.getItems().size() + " sinh viên · " + online + " đang kết nối"); updateActions();
     }
-    private void invalidatePreparation() { version++; progress = null; warnings = java.util.Map.of(); runningRound = null; deadlineMillis = 0; prepared = false; roster.getItems().clear(); refreshConnections(); status.setText("Chuẩn bị lại sau khi đổi lớp, ca hoặc đề."); updateActions(); }
+    private void invalidatePreparation() { version++; progress = null; warnings = java.util.Map.of(); runningRound = null; deadlineMillis = 0; prepared = false; roster.getItems().clear(); refreshConnections(); updateActions(); }
     private void refreshProgress() {
-        if (disposed || busy || progressLoading || roster.getItems().isEmpty() || group.getValue() == null) return;
+        if (disposed || busy || progressLoading || group.getValue() == null) return;
         long request = version;
         Long classId = group.getValue().id(), shiftId = shift.getValue() == null ? null : shift.getValue().id();
-        boolean checkingPreparation = prepared;
+        boolean checkingPreparation = progress == null;
         List<ClassService.RosterStudent> expected = List.copyOf(roster.getItems());
         progressLoading = true;
         record Checked(java.util.Optional<ExamService.RoundProgress> progress, List<ClassService.RosterStudent> rows,
@@ -164,7 +164,10 @@ final class ExamOrganizer extends BorderPane {
             progressLoading = false;
             if (disposed || request != version) return;
             if (checkingPreparation && !new java.util.HashSet<>(expected).equals(new java.util.HashSet<>(result.rows()))) {
-                invalidatePreparation(); status.setText("Danh sách thi đã thay đổi. Bấm Chuẩn bị ca thi để kiểm tra lại."); return;
+                invalidatePreparation(); prepare(); return;
+            }
+            if (checkingPreparation && result.progress().filter(saved -> shiftId != null || exams.currentTime().isBefore(saved.deadline())).isPresent()) {
+                invalidatePreparation(); prepare(); return;
             }
             progress = checkingPreparation ? null : result.progress().orElse(null);
             warnings = progress == null ? java.util.Map.of() : result.warnings();
@@ -179,8 +182,9 @@ final class ExamOrganizer extends BorderPane {
     }
     private void filterTemplates() {
         ClassInfo selected = group.getValue();
+        Long oldExam = exam.getValue() == null ? null : exam.getValue().id();
         exam.getItems().setAll(templates.stream().filter(t -> selected != null && (t.subjectName() == null || t.subjectName().equals(selected.subjectName()))).toList());
-        exam.getSelectionModel().selectFirst();
+        exam.setValue(exam.getItems().stream().filter(t -> t.id().equals(oldExam)).findFirst().orElse(exam.getItems().isEmpty() ? null : exam.getItems().getFirst()));
     }
     void reload() {
         if (disposed) return; long request = ++version; busy = true; runningRound = null; warnings = java.util.Map.of(); deadlineMillis = 0; updateActions();
@@ -195,9 +199,9 @@ final class ExamOrganizer extends BorderPane {
         }, this::failed);
     }
     private void prepare() {
-        ClassInfo selected = group.getValue(); if (selected == null || exam.getValue() == null) return;
+        ClassInfo selected = group.getValue(); if (selected == null) { status.setText("Chưa có lớp học phần."); return; }
         var selectedShift = shift.getValue();
-        long request = ++version; prepared = false; busy = true; updateActions();
+        long request = ++version; prepared = false; busy = true; status.setText("Đang tải danh sách…"); updateActions();
         record Prepared(List<ClassService.RosterStudent> rows, java.util.Optional<ExamService.RoundProgress> progress) {}
         UiSupport.async("prepare-exam-roster", () -> {
             var savedProgress = exams.roundProgress(selected.id(), selectedShift == null ? null : selectedShift.id());
@@ -213,14 +217,12 @@ final class ExamOrganizer extends BorderPane {
             boolean opened = selectedShift != null && selectedShift.roundId() != null
                     || progress != null && exams.currentTime().isBefore(progress.deadline());
             busy = false; roster.getItems().setAll(rows); prepared = !rows.isEmpty() && !opened; refreshConnections();
-            status.setText(prepared ? "Sẵn sàng bắt đầu thi."
-                    : opened ? "Ca đã mở, danh sách đã chốt. Sinh viên thêm vào lớp sau đó chờ lượt thi tiếp theo."
-                    : "Lớp chưa có sinh viên. Nhập CSV trong Lớp & sinh viên trước.");
+            showShiftState();
             refreshProgress();
         }, this::failed);
     }
     private void start() {
-        if (!prepared || server.get() == null || !server.get().isRunning()) return;
+        if (!prepared || exam.getValue() == null || server.get() == null || !server.get().isRunning()) return;
         Long classId = group.getValue().id(), templateId = exam.getValue().id(); version++; progress = null; busy = true; updateActions();
         Long shiftId = shift.getValue() == null ? null : shift.getValue().id();
         record Started(ExamServer.Publication publication, List<ExamShiftService.ShiftInfo> shifts) {}
@@ -230,16 +232,18 @@ final class ExamOrganizer extends BorderPane {
             if (disposed) return; busy = false; prepared = false; updateActions();
             var publication = opened.publication(); setShifts(opened.shifts(), shiftId);
             runningRound = publication.exam().getId(); deadlineMillis = publication.exam().getDeadlineEpochMillis();
-            status.setText("Đang thi · Ca #" + publication.exam().getId() + " · Hạn nộp "
-                    + UiSupport.time(java.time.Instant.ofEpochMilli(publication.exam().getDeadlineEpochMillis())));
+            showShiftState();
             announce.accept(status.getText()); refreshConnections(); refreshProgress();
         }, ex -> { prepared = false; failed(ex); });
     }
     private void updateActions() {
-        group.setDisable(busy); exam.setDisable(busy); shift.setDisable(busy || shift.getItems().isEmpty()); capacity.setDisable(busy); variantCount.setDisable(busy);
+        group.setDisable(busy); exam.setDisable(busy); shift.setDisable(busy || shift.getItems().isEmpty()); capacity.setDisable(busy);
         split.setDisable(busy || group.getValue() == null);
-        prepare.setDisable(busy || group.getValue() == null || exam.getValue() == null);
-        start.setDisable(busy || !prepared || server.get() == null || !server.get().isRunning());
+        start.setDisable(busy || !prepared || exam.getValue() == null || server.get() == null || !server.get().isRunning());
+        boolean running = runningRound != null && deadlineMillis > exams.currentTime().toEpochMilli();
+        end.setVisible(running); end.setManaged(running);
+        start.setVisible(!running); start.setManaged(!running);
+        variantCount.setDisable(busy || running || shift.getValue() != null && shift.getValue().roundId() != null);
         end.setDisable(busy || runningRound == null || deadlineMillis <= exams.currentTime().toEpochMilli()
                 || server.get() == null || !server.get().isRunning());
     }
@@ -259,16 +263,19 @@ final class ExamOrganizer extends BorderPane {
         UiSupport.async("end-lan-exam", () -> { currentServer.endExam(roundId); return true; }, done -> {
             if (disposed) return;
             busy = false; deadlineMillis = 0; updateActions();
-            status.setText("Đã dừng ca #" + roundId + ". Bài đã nhận đang được chấm; xem điểm tại Kết quả.");
-            announce.accept(status.getText()); refreshProgress();
+            showShiftState();
+            announce.accept("Đã dừng ca #" + roundId + ". Xem điểm tại Kết quả."); refreshProgress();
         }, this::failed);
     }
     private void showShiftState() {
         var selected = shift.getValue();
-        shiftState.setText(selected == null ? "Cả lớp"
-                : progress != null && java.util.Objects.equals(selected.roundId(), progress.roundId())
-                ? (exams.currentTime().isBefore(progress.deadline()) ? "Đang thi" : "Đã kết thúc") : selected.state(exams.currentTime()));
-        prepare.setText(selected != null && selected.roundId() != null ? "Xem danh sách ca" : "Chuẩn bị ca thi");
+        if (runningRound != null && deadlineMillis > exams.currentTime().toEpochMilli())
+            status.setText("Đang thi · Hạn nộp " + UiSupport.time(java.time.Instant.ofEpochMilli(deadlineMillis)));
+        else if (runningRound != null || selected != null && selected.roundId() != null) status.setText("Đã kết thúc");
+        else if (group.getValue() == null) status.setText("Chưa có lớp học phần.");
+        else if (roster.getItems().isEmpty()) status.setText("Chưa có sinh viên.");
+        else if (exam.getValue() == null) status.setText("Chưa có đề thi cùng môn.");
+        else status.setText("Chưa bắt đầu");
     }
     private void setShifts(List<ExamShiftService.ShiftInfo> items, Long selectedId) {
         changingOptions = true;
@@ -283,25 +290,49 @@ final class ExamOrganizer extends BorderPane {
         long request = ++version; busy = true; prepared = false; updateActions();
         UiSupport.async("load-exam-shifts", () -> shifts.list(selected.id()), items -> {
             if (disposed || request != version) return;
-            busy = false; setShifts(items, oldShift); refreshConnections();
-            status.setText(items.isEmpty() ? "Chưa chia ca"
-                    : "Đã lưu " + items.size() + " ca. Chọn ca và đề, chuẩn bị danh sách rồi bắt đầu.");
+            busy = false; setShifts(items, oldShift); prepare();
         }, this::failed);
     }
     private void split() {
-        if (group.getValue() == null) return;
-        final int size;
-        try {
-            size = Integer.parseInt(capacity.getEditor().getText().strip());
-            if (size < 1 || size > RosterCsv.MAX_ROWS) throw new NumberFormatException();
-            capacity.getValueFactory().setValue(size);
-        } catch (NumberFormatException ex) { status.setText("Số sinh viên mỗi ca từ 1–2.000."); return; }
+        if (busy || group.getValue() == null) return;
+        capacity.getEditor().setText(Integer.toString(capacity.getValue()));
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.initOwner(getScene().getWindow());
+        dialog.setTitle("Chia ca thi"); AppUi.desktopStyle(dialog.getDialogPane());
+        dialog.getDialogPane().setId("exam-split-dialog");
+        Label error = AppUi.label("", "error"); error.setId("exam-split-error");
+        VBox form = new VBox(12, new Label(group.getValue().toString()), AppUi.toolbar(new Label("Sinh viên mỗi ca"), capacity), error);
+        form.setPrefWidth(480); dialog.getDialogPane().setContent(form);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        Button confirm = (Button) dialog.getDialogPane().lookupButton(ButtonType.OK);
+        confirm.setId("exam-split-confirm"); confirm.setText("Chia theo STT");
+        ((Button) dialog.getDialogPane().lookupButton(ButtonType.CANCEL)).setText("Hủy");
+        confirm.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+            event.consume();
+            final int size;
+            try {
+                size = Integer.parseInt(capacity.getEditor().getText().strip());
+                if (size < 1 || size > RosterCsv.MAX_ROWS) throw new NumberFormatException();
+                capacity.getValueFactory().setValue(size);
+            } catch (NumberFormatException ex) { error.setText("Nhập số sinh viên từ 1 đến 2.000."); return; }
+            confirm.setDisable(true); dialog.getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(true);
+            dialog.setOnCloseRequest(e -> { if (busy) e.consume(); });
+            split(size, dialog, error);
+        });
+        dialog.showAndWait();
+    }
+    private void split(int size, Dialog<ButtonType> dialog, Label error) {
         Long classId = group.getValue().id(); long request = ++version; prepared = false; busy = true; updateActions();
         UiSupport.async("split-exam-shifts", () -> shifts.split(classId, size), items -> {
             if (disposed || request != version) return;
-            busy = false; roster.getItems().clear(); setShifts(items, null); refreshConnections();
-            status.setText("Đã lưu " + items.size() + " ca theo STT CSV tăng dần, tối đa " + size + " sinh viên/ca. Chọn ca rồi bấm Chuẩn bị ca thi.");
-        }, this::failed);
+            busy = false; dialog.setResult(ButtonType.OK); dialog.close();
+            invalidatePreparation(); setShifts(items, null); prepare();
+        }, ex -> {
+            if (disposed || request != version) return;
+            busy = false; prepared = progress == null && !roster.getItems().isEmpty(); error.setText(ex.getMessage());
+            dialog.getDialogPane().lookupButton(ButtonType.OK).setDisable(false);
+            dialog.getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(false);
+            updateActions();
+        });
     }
     private void failed(Exception ex) { if (!disposed) { busy = false; status.setText(ex.getMessage()); updateActions(); } }
     void serverStateChanged() { updateActions(); }

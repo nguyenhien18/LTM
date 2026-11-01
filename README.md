@@ -22,7 +22,9 @@ Một Server phục vụ **một giảng viên và một ca đang diễn ra tạ
 
 Server và Client dùng chung giao diện tông xám, menu bên trái và bảng dữ liệu có hàng/cột rõ ràng. Trong **Ngân hàng câu hỏi**, bấm nội dung câu để mở hộp chỉnh sửa. Trong cửa sổ tạo đề, bấm câu ở bảng ngân hàng hoặc bảng câu đã chọn để xem chi tiết; các thao tác tạo/sửa/nhập câu hỏi nằm ở trang ngân hàng riêng.
 
-Trong **Lớp & sinh viên**, gõ tên hoặc MSV vào ô tìm kiếm để lọc ngay trong lớp đang chọn, không phân biệt hoa/thường và dấu tiếng Việt. Cột **Kết nối hiện tại** chỉ hiển thị Đang kết nối / Chưa kết nối; trạng thái làm bài và nộp bài được xem theo từng ca trong **Tổ chức thi** và **Kết quả**.
+Trong **Tổ chức thi → Đề thi**, chọn **Tất cả môn** hoặc một môn cụ thể để lọc danh sách, kết hợp với tìm tên đề không phân biệt hoa/thường và dấu tiếng Việt. Bộ lọc môn được giữ khi bấm Làm mới.
+
+Trong **Lớp & sinh viên**, gõ tên hoặc MSV vào ô tìm kiếm để lọc ngay trong lớp đang chọn, không phân biệt hoa/thường và dấu tiếng Việt. Bộ lọc bên cạnh có **Tất cả / Đang kết nối / Chưa kết nối**, kết hợp với tìm kiếm và tự cập nhật khi sinh viên vào/thoát; STT gốc được giữ nguyên. Cột **Kết nối hiện tại** chỉ hiển thị Đang kết nối / Chưa kết nối; trạng thái làm bài và nộp bài được xem theo từng ca trong **Tổ chức thi** và **Kết quả**.
 
 ## Yêu cầu môi trường
 
@@ -129,15 +131,15 @@ Ngày sinh có thể chọn bằng lịch hoặc gõ theo `dd/MM/yyyy`. Nếu đ
 3. **Ngân hàng câu hỏi:** chọn môn, soạn câu hoặc nhập `.docx`.
 4. **Tổ chức thi → Đề thi:** tạo đề mẫu, chọn thủ công hoặc nhập số câu từng mức để lấy ngẫu nhiên; kiểm tra rồi lưu.
 5. Sinh viên kết nối vào phòng chờ bằng địa chỉ hiển thị trên Server (Server đã tự mở sau đăng nhập giảng viên).
-6. **Tổ chức thi → Ca thi:** chọn lớp; nếu cần chia ca thì đặt số người/ca và bấm **Chia ca theo STT**. Chọn ca, đề, số mã rồi **Chuẩn bị ca thi**.
-7. Kiểm tra danh sách/kết nối rồi bấm **Bắt đầu thi**. Đây là lúc đồng hồ chung bắt đầu; chuẩn bị chưa tính giờ.
+6. **Tổ chức thi → Ca thi:** chọn lớp; nếu cần chia ca thì bấm **Chia ca…**, nhập số sinh viên mỗi ca và xác nhận **Chia theo STT**. Chọn ca, đề và số mã đề; danh sách tự tải khi đổi lựa chọn.
+7. Kiểm tra danh sách/kết nối rồi bấm **Bắt đầu thi**. Đây là lúc đồng hồ chung bắt đầu; xem danh sách chưa tính giờ. Khi ca đang chạy, nút **Dừng bài thi** thay cho nút bắt đầu.
 8. Theo dõi đến hết giờ hoặc bấm **Dừng bài thi** để kết thúc sớm; vào **Kết quả** để lọc và xuất CSV. Chờ ca trước kết thúc và chấm xong mới mở ca tiếp theo.
 
 **Dừng bài thi** có bước xác nhận và chỉ áp dụng ca đang xem. Hệ thống chốt hạn ngay, ngừng nhận người mới vào ca, chấm đáp án đã nhận cho cả người online và offline, giữ nguyên bài đã nộp và ghi vắng người chưa vào bài. Các đáp án đã nhận trước thời điểm dừng được xử lý trước khi chấm; dữ liệu gửi muộn không thay điểm. Kết nối Server vẫn hoạt động để tổ chức ca tiếp theo. Đây là kết thúc ca, không phải tạm dừng rồi tiếp tục; khi đăng xuất hoặc đóng cửa sổ giảng viên thì Server mới đóng kết nối.
 
 Bảng **Kết quả** và CSV có đủ thí sinh theo danh sách ca đã chốt, kèm trạng thái Chưa vào bài / Đang làm / Đang chấm / Đã nộp / Hết giờ — đã chấm / Vắng thi. Chỉ kết luận vắng sau hạn và khi chưa từng vào bài. Người vắng hoặc chưa có kết quả để trống điểm, số câu đúng và thời gian nộp; bài đã chấm được 0 vẫn ghi `0.00`. Sinh viên nhập bổ sung sau lúc mở ca không được thêm vào báo cáo ca đó. Bản ghi tự chấm hết giờ được lưu riêng để phân biệt với nộp chủ động. Với ca cũ chưa lưu danh sách và không chia ca, chỉ khôi phục được các bài nộp đã có, không suy diễn danh sách vắng từ lớp hiện tại. Bấm Làm mới để cập nhật kết quả trước khi xuất.
 
-**Danh sách lớp và danh sách ca thi:** khi bấm Bắt đầu thi, Server chốt danh sách của lượt thi trong cùng giao dịch với thời hạn và mã đề, áp dụng cả 1 mã lẫn nhiều mã. Danh sách thay đổi sau bước chuẩn bị thì phải chuẩn bị lại. Sinh viên nhập thêm sau khi mở ca vẫn thuộc lớp nhưng chờ lượt sau; danh sách đã chốt được giữ khi khởi động lại Server. Các lượt thi đã mở bằng phiên bản cũ chưa có bản chốt này tiếp tục dùng cơ chế cũ.
+**Danh sách lớp và danh sách ca thi:** khi bấm Bắt đầu thi, Server chốt danh sách của lượt thi trong cùng giao dịch với thời hạn và mã đề, áp dụng cả 1 mã lẫn nhiều mã. Trước khi bắt đầu, giao diện tự kiểm tra và tải lại khi danh sách thay đổi; Server vẫn kiểm tra lần cuối trong giao dịch mở thi. Sinh viên nhập thêm sau khi mở ca vẫn thuộc lớp nhưng chờ lượt sau; danh sách đã chốt được giữ khi khởi động lại Server. Các lượt thi đã mở bằng phiên bản cũ chưa có bản chốt này tiếp tục dùng cơ chế cũ.
 
 Ví dụ 60 sinh viên STT 1–60, 30 người/ca: ca 1 gồm STT 1–30, ca 2 gồm STT 31–60. Hệ thống sắp theo STT CSV tăng dần; khoảng trống STT được giữ nguyên. Danh sách ca được chốt trong database; nhập lại CSV không tự thay danh sách ca đã chia. Có thể chia lại trước khi đợt bắt đầu; đợt đã bắt đầu cần hoàn tất các ca trước khi tạo đợt mới. Nếu chưa chia ca có thể thi cả lớp.
 
