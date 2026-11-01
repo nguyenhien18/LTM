@@ -31,7 +31,7 @@ Trong **Lớp & sinh viên**, gõ tên hoặc MSV vào ô tìm kiếm để lọ
 - Các máy kết nối được IP/cổng Server trong LAN; cho phép Java nhận TCP cổng **5000** qua firewall.
 - Lần build đầu cần tải thư viện Maven. Sau khi có đủ thư viện/runtime, lúc thi không cần Internet.
 
-Repository gồm mã nguồn, kiểm thử, cấu hình chạy và tài liệu phục vụ bộ nộp. Thư mục `report/` được giữ theo cấu trúc bài tập lớn; nội dung báo cáo chưa đưa lên GitHub. `statics/` chứa sơ đồ, dữ liệu demo và bằng chứng kiểm thử. EXE/ZIP, thư mục đóng gói và dữ liệu build được giữ ngoài repository.
+Repository gồm mã nguồn, kiểm thử, cấu hình chạy và tài liệu phục vụ bộ nộp. Thư mục `report/` được giữ theo cấu trúc bài tập lớn; nội dung báo cáo chưa đưa lên GitHub. `statics/` chứa sơ đồ, dữ liệu demo và bằng chứng kiểm thử. Bản ZIP Client Windows được lưu trong `downloads/`; các thư mục build và đóng gói cục bộ vẫn được bỏ qua.
 
 ## Cấu trúc và tài liệu nộp bài
 
@@ -42,6 +42,7 @@ LAN_Exam_System/
 ├── TOPICS.md                   # Đề tài nhóm lựa chọn và phạm vi
 ├── pom.xml                     # Java 21, JavaFX và các dependency Maven
 ├── run-server.bat / run-client.bat / start-mysql.bat
+├── downloads/                  # ZIP Client Windows và mã SHA-256
 ├── report/
 │   └── README.md               # Giữ vị trí báo cáo; bổ sung bản nộp sau
 ├── statics/
@@ -97,6 +98,10 @@ $env:DB_PASSWORD = "root"
 `root/root` là cấu hình demo trong `docker-compose.yml`. Chọn một MySQL đang dùng cổng 3306, tránh chạy đồng thời hai dịch vụ cùng cổng. Không thay mật khẩu MySQL đã dùng thành công bằng giá trị minh họa.
 
 ## Chạy Client
+
+**Dùng bản đóng gói Windows:** [Tải LANExamClient.zip](https://github.com/nguyenhien18/LTM/raw/refs/heads/main/downloads/LANExamClient.zip), giải nén rồi mở `LANExamClient.exe`. Gói có sẵn Java runtime và JavaFX, máy sinh viên không cần cài JDK/Maven/MySQL. Xem [hướng dẫn và SHA-256](downloads/README.md). Máy giảng viên vẫn chạy Server theo hướng dẫn phía trên.
+
+**Chạy từ mã nguồn:**
 
 Mở terminal khác trên cùng máy hoặc tải mã nguồn về máy sinh viên:
 
