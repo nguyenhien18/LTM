@@ -1,4 +1,6 @@
-# Kế hoạch thực nghiệm (chưa thực hiện benchmark)
+# Kế hoạch mở rộng thực nghiệm
+
+Bộ kiểm thử chức năng và phép đo TCP loopback/H2 đã chạy; số liệu nằm tại [kết quả](README.md). Tài liệu này mô tả các phép thử cần bổ sung, không phải kết quả đã có. Ưu tiên tiếp theo là Client và Server trên các máy LAN riêng với MySQL.
 
 ## Môi trường cần ghi lại
 
@@ -18,7 +20,7 @@ Commit; thời gian; CPU/RAM/OS từng máy; JDK; phiên bản MySQL/H2; số Cl
 ## Cách đo
 
 - Đo thời gian request–response bằng đồng hồ đơn điệu trên cùng Client, không lấy hiệu đồng hồ tường của hai máy chưa đồng bộ.
-- Response time đăng nhập: gửi LOGIN đến nhận LOGIN_RESULT. Nhận đề: gửi JOIN_EXAM đến nhận EXAM_STARTED. Nộp: gửi SUBMIT_EXAM đến nhận SUBMIT_RESULT.
+- Phép đo LOGIN hiện tại bắt đầu trước khi tạo kết nối và kết thúc khi nhận LOGIN_RESULT, nên gồm cả TCP connect. Nếu đo riêng thời gian xác thực ở lần sau, cần dùng tên chỉ số khác để phân biệt. Nhận đề: gửi JOIN_EXAM đến nhận EXAM_STARTED. Nộp: gửi SUBMIT_EXAM đến nhận SUBMIT_RESULT.
 - ANSWER_UPDATE chưa có ACK riêng. Không dùng thời điểm `send()` xong để khẳng định đã lưu. Muốn đo lưu bài cần instrument log Server hoặc dùng một hàng rào PING/PONG sau update và nêu rõ phép đo gồm cả PING/PONG; đối chiếu database.
 - Throughput = số tác vụ hoàn thành thành công / khoảng đo, ghi rõ loại tác vụ. Error rate = số thất bại / tổng tác vụ thử. Báo riêng timeout và loại lỗi.
 - Báo median/p95 và số mẫu, có warm-up tách riêng; lặp mỗi cấu hình ít nhất 3 lần nếu điều kiện cho phép. Không bỏ kết quả xấu không giải thích.

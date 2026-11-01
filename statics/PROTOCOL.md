@@ -48,9 +48,15 @@ Các ID sau chỉ minh họa, không thể dùng để bỏ qua kiểm tra danh 
 3. JOIN_EXAM được kiểm tra lại; EXAM_STARTED cung cấp đề đúng mã và lựa chọn đã lưu nếu tiếp tục.
 4. Mỗi thay đổi tạo ANSWER_UPDATE; chưa có ACK riêng cho từng lần lưu. Chỉ dữ liệu Server đã lưu mới được bảo đảm khôi phục.
 5. RequestReceipt lưu thời điểm Server nhận đủ frame trước khi xếp hàng. FIFO giữ thứ tự request của mỗi Client; tối đa 16 request được xử lý song song.
-6. Nộp lặp không tạo thêm kết quả. Sau deadline/dừng ca, hệ thống chờ các đáp án nhận trước hạn xử lý rồi chấm. Yêu cầu nhận sau hạn không thay điểm.
+6. Nộp lặp không tạo thêm kết quả. Sau deadline/dừng ca, hệ thống chờ các đáp án nhận trước hạn xử lý rồi chấm. `ExamService` đổi lựa chọn về đáp án gốc và tính điểm bằng Java; JPA/MySQL lưu bài nộp và câu trả lời trong giao dịch. Yêu cầu nhận sau hạn không thay điểm.
 7. Rời màn hình liên tục từ 5 giây: xác nhận được gửi lại cùng episodeId; Server ghi một sự kiện, cập nhật khi quay lại, báo giảng viên ngay từ lần đầu. Gián đoạn mạng được ghi riêng.
 8. Sau restart, ca còn hạn được khôi phục từ CSDL; Client phải đăng nhập lại. Deadline và mã đề không được cấp lại tùy ý.
+
+`attemptGate` dùng read lock khi vào bài (`JOIN_EXAM`); mở/dừng ca, đình chỉ và dừng Server dùng write lock. `ANSWER_UPDATE` và `SUBMIT_EXAM` không lấy read lock này: thứ tự và việc chốt bài dựa vào FIFO, RequestReceipt, giao dịch, khóa bản ghi và ràng buộc duy nhất.
+
+Một mã dùng đề **Gốc**, có thể không có `variants_json` hoặc `variant_code`. Từ 2–8 mã mới có bố cục và phân công mã số 101–108. Khi khởi động, Server chỉ phục hồi ca còn hạn, không tự mở lại hay gia hạn ca đã kết thúc. Thi cả lớp không chia ca có thể tạo lượt mới từ cùng đề mẫu; ca đã chia từng mở thi không được dùng lại.
+
+Xem [sơ đồ TCP](protocol.png), [nguồn SVG](protocol.svg), [nguồn PlantUML](protocol.puml) và [thiết kế dữ liệu](DATA_MODEL.md).
 
 ## Lỗi và giới hạn
 

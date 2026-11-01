@@ -48,6 +48,8 @@ LAN_Exam_System/
 │   ├── architecture.png / architecture.svg
 │   ├── protocol.png / protocol.svg
 │   ├── PROTOCOL.md             # Định dạng và luồng message hiện hành
+│   ├── DATA_MODEL.md / REFERENCES.md
+│   ├── class-students.* / exam-data.* / exam-states.*
 │   ├── results/                # Log thật, tổng hợp và kế hoạch thực nghiệm
 │   └── dataset/                # Hai CSV 60 sinh viên, Word mẫu và ngân hàng demo
 ├── tools/                      # Xuất sơ đồ và kiểm tra tài nguyên bộ nộp
@@ -199,7 +201,7 @@ Mỗi tiêu đề MỨC 1–6 áp dụng cho các câu phía dưới. Nội dung
 
 ![Luồng giao tiếp thi trắc nghiệm](statics/protocol.png)
 
-Xem [thiết kế giao thức chi tiết](statics/PROTOCOL.md). Bản SVG đi kèm có thể dùng để phóng to và cập nhật hình cho báo cáo.
+Xem [thiết kế giao thức](statics/PROTOCOL.md), [dữ liệu và trạng thái bài thi](statics/DATA_MODEL.md), hoặc [toàn bộ hình PNG/SVG](statics/README.md). Sơ đồ đặt bước tính điểm ở Server, MySQL lưu kết quả trong giao dịch. Nguồn SVG và PlantUML đi kèm có thể chỉnh sửa để cập nhật hình cho báo cáo.
 
 ```text
 Client JavaFX ── TCP / JSON Lines ── Server JavaFX ── Hibernate/JPA ── MySQL
@@ -235,16 +237,18 @@ Có test 80 socket cùng tồn tại trên loopback; kết quả đó không tha
 
 ## Kết quả thực nghiệm và bằng chứng hiện có
 
-Log ngày 31/10/2026 ghi nhận **141 kiểm thử, 0 thất bại, 0 lỗi, 0 bỏ qua**, thời gian toàn bộ lệnh Maven **1 phút 34 giây**. Đây là kết quả kiểm thử chức năng/tích hợp/giao diện; thời gian chạy bộ test không phải độ trễ phản hồi hệ thống. Log gốc được giữ tại [statics/results/full-tests-2026-10-31.txt](statics/results/full-tests-2026-10-31.txt).
+Lần chạy chức năng ghi nhận **142 test: 141 đạt, 1 bỏ qua, 0 thất bại, 0 lỗi**, thời gian cả lệnh **1 phút 43 giây**. Test bỏ qua là `ReportBenchmarkTest`, đã được chạy riêng và đạt. Log nằm tại [functional-tests.txt](statics/results/functional-tests.txt); thời gian chạy bộ test không phải độ trễ phản hồi hệ thống.
 
 Có thêm `ReportBenchmarkTest` để đo TCP loopback/H2 ở các mức 1/10/20/40/80 Client, 3 lượt mỗi mức, 30 câu, 5 update mỗi Client. Test này chỉ chạy khi bật riêng:
 
 ```powershell
 mvn "-Dlanexam.build.directory=output/benchmark-build" "-Dtest=ReportBenchmarkTest" "-Dlanexam.benchmark=true" test
-python tools/analyze_report_benchmark.py
+python tools/analyze_report_benchmark.py --input-dir output/report-final/experiment
 ```
 
-Mẫu đo thô, cấu hình JVM và thống kê được tạo trong `output/report-final/experiment/`; đây là đầu ra cục bộ, không đưa lên GitHub. Công cụ tổng hợp cần Python và Pillow. Phép đo dùng Client/Server cùng JVM và H2 in-memory, chưa đại diện MySQL qua LAN nhiều máy. [Kế hoạch thực nghiệm](statics/results/EXPERIMENT_PLAN.md) định nghĩa các phép đo mở rộng. Kiểm tra tài nguyên bộ nộp bằng `powershell -NoProfile -ExecutionPolicy Bypass -File tools/Test-Submission.ps1`.
+Đã có **3.624 thao tác thành công, 0 lỗi/timeout**. Tại 80 Client, median/p95 khi nộp bài là **65,65 / 141,14 ms**, thông lượng nộp **599,49 thao tác/giây**. Client và Server cùng JVM, dùng H2 trong bộ nhớ; đây chưa phải phép đo MySQL qua nhiều máy LAN hoặc kết luận tải tối đa.
+
+Các [bảng, biểu đồ, log và dữ liệu thô](statics/results/README.md) được lưu cùng nhau trên GitHub để đối chiếu báo cáo. Chạy lại bộ đo tạo dữ liệu mới trong `output/report-final/experiment/`; công cụ tổng hợp cần Python và Pillow. [Kế hoạch thực nghiệm](statics/results/EXPERIMENT_PLAN.md) nêu các bước đo bổ sung. Kiểm tra tài nguyên bộ nộp bằng `powershell -NoProfile -ExecutionPolicy Bypass -File tools/Test-Submission.ps1`.
 
 ## Novelty / Contributions
 
@@ -265,8 +269,8 @@ Xác thực sinh viên bằng ngày sinh còn yếu và TCP chưa TLS; phù hợ
 
 - [Java 21 API](https://docs.oracle.com/en/java/javase/21/docs/api/): Socket, ServerSocket và concurrency.
 - [OpenJFX 21 API](https://openjfx.io/javadoc/21/): Stage, điều khiển và cơ chế sự kiện giao diện.
-- [Hibernate ORM 6.6 User Guide](https://docs.jboss.org/hibernate/orm/6.6/userguide/html_single/Hibernate_User_Guide.html): JPA, giao dịch và persistence.
+- [Hibernate ORM 6.6 User Guide](https://docs.hibernate.org/orm/6.6/userguide/html_single/): JPA, giao dịch và persistence.
 - [MySQL 8.0 Reference Manual](https://dev.mysql.com/doc/refman/8.0/en/): cấu hình và quản lý database.
 - [Jackson Databind](https://github.com/FasterXML/jackson-databind): ánh xạ message JSON.
 
-Danh mục trên định vị tài liệu của các công nghệ đang dùng; khi viết báo cáo, nhóm cần trích dẫn đúng nội dung đã tham khảo trong từng phần và bổ sung nguồn related work đã thực sự đọc.
+Danh mục đầy đủ tại [tài liệu tham khảo kỹ thuật](statics/REFERENCES.md), gồm RFC TCP/JSON, JSON Lines, Java, Hibernate, MySQL, H2, Moodle và Safe Exam Browser. Khi viết báo cáo, gắn nguồn vào đúng đoạn đã sử dụng.

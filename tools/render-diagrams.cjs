@@ -4,7 +4,7 @@ const path = require('node:path');
 const sharp = require('sharp');
 const root = path.resolve(__dirname, '..');
 (async () => {
-  for (const name of ['architecture', 'protocol']) {
+  for (const name of ['architecture', 'protocol', 'class-students', 'exam-data', 'exam-states']) {
     const source = path.join(root, 'statics', `${name}.svg`);
     const destination = path.join(root, 'statics', `${name}.png`);
     await sharp(fs.readFileSync(source), { density: 120 }).png().toFile(destination);

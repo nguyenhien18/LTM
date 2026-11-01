@@ -24,7 +24,7 @@ TCP framing; vòng đời kết nối; protocol và DTO; request/response và th
 
 ## Điểm cải tiến và đánh giá
 
-Các ứng viên đóng góp: khôi phục ca có snapshot; chốt bài theo thời điểm Server nhận request; mã đề bảo toàn cơ cấu mức độ; episode ID chống cảnh báo trùng. Chỉ khẳng định kết quả định lượng sau thực nghiệm. Xem `statics/results/EXPERIMENT_PLAN.md`.
+Các cải tiến đã có test: khôi phục ca có danh sách và bài đã lưu; chốt bài theo thời điểm Server nhận request; mã đề giữ cơ cấu mức độ; episode ID chống cảnh báo trùng. Đã chạy bộ test chức năng và phép đo TCP loopback/H2 với 3.624 thao tác thành công. Xem [kết quả và dữ liệu](statics/results/README.md), [hình thiết kế](statics/README.md) và [kế hoạch đo tiếp](statics/results/EXPERIMENT_PLAN.md).
 
 ## Thông tin nhóm
 
@@ -36,7 +36,6 @@ Giảng viên hướng dẫn: ........................................
 
 | Thành viên | MSV | Phần việc kỹ thuật thực tế | Bằng chứng đóng góp |
 |---|---|---|---|
-| | | | |
 | | | | |
 | | | | |
 | | | | |

@@ -1,38 +1,82 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1350" viewBox="0 0 1500 1350">
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 Z" fill="#42576b"/></marker>
-    <style>text{font-family:'Segoe UI',Arial,sans-serif;fill:#223344}.title{font-size:30px;font-weight:700}.heading{font-size:23px;font-weight:600}.body{font-size:20px}.small{font-size:18px;fill:#526270}.line{stroke:#42576b;stroke-width:2;marker-end:url(#arrow)}.life{stroke:#a2aeb8;stroke-width:2;stroke-dasharray:7 6}</style>
-  </defs>
-  <rect width="1500" height="1350" fill="#f6f8fa"/>
-  <text x="35" y="46" class="title">LAN Exam System — Luồng TCP và lưu trạng thái</text>
-  <rect x="75" y="83" width="300" height="65" rx="10" fill="#e0e8ef"/>
-  <rect x="575" y="83" width="300" height="65" rx="10" fill="#e0e8ef"/>
-  <rect x="1100" y="83" width="300" height="65" rx="10" fill="#e0e8ef"/>
-  <text x="225" y="124" class="heading" text-anchor="middle">Client sinh viên</text>
-  <text x="725" y="124" class="heading" text-anchor="middle">Server / Service</text>
-  <text x="1250" y="124" class="heading" text-anchor="middle">MySQL</text>
-  <path d="M225,148 V1220 M725,148 V1220 M1250,148 V1220" class="life"/>
-  <path d="M225,215 H725" class="line"/><text x="250" y="202" class="body">TCP connect: IP Server / cổng 5000</text>
-  <path d="M225,275 H725" class="line"/><text x="250" y="262" class="body">LOGIN (MSV, ngày sinh, khả năng Client)</text>
-  <path d="M725,335 H1250" class="line"/><text x="750" y="322" class="body">Kiểm tra danh tính, lớp và khóa theo giảng viên</text>
-  <path d="M725,395 H225" class="line"/><text x="250" y="382" class="body">LOGIN_RESULT</text>
-  <path d="M725,455 H225" class="line"/><text x="250" y="442" class="body">EXAM_AVAILABLE (offer đúng quyền hoặc null)</text>
-  <path d="M225,515 H725" class="line"/><text x="250" y="502" class="body">JOIN_EXAM (examId)</text>
-  <path d="M725,575 H1250" class="line"/><text x="750" y="562" class="body">Kiểm tra roster, hạn, tạo/đọc lượt và mã đã gán</text>
-  <path d="M725,635 H225" class="line"/><text x="250" y="622" class="body">EXAM_STARTED (đề, deadline, savedAnswers)</text>
-  <path d="M225,695 H725" class="line"/><text x="250" y="682" class="body">ANSWER_UPDATE (examId, snapshot answers)</text>
-  <path d="M725,755 H1250" class="line"/><text x="750" y="742" class="body">Lưu lựa chọn hợp lệ theo RequestReceipt</text>
-  <rect x="45" y="790" width="1370" height="155" rx="12" fill="#f1eee5" stroke="#b7a883"/>
-  <text x="65" y="819" class="small">TÙY CHỌN TRONG LÚC LÀM BÀI — rời toàn màn hình / thu nhỏ / chuyển ứng dụng</text>
-  <path d="M225,866 H725" class="line"/><text x="250" y="851" class="body">EXAM_FOCUS_CHANGED (cùng episodeId, gửi lại)</text>
-  <path d="M725,916 H225" class="line"/><text x="250" y="902" class="body">EXAM_WARNING_STATUS khi Server đo đủ 5 giây</text>
-  <text x="770" y="871" class="small">Một lần rời chỉ ghi một sự kiện.</text>
-  <text x="770" y="902" class="small">Nhật ký lưu DB; Server báo giảng viên.</text>
-  <path d="M225,1005 H725" class="line"/><text x="250" y="992" class="body">SUBMIT_EXAM (examId, answers)</text>
-  <path d="M725,1065 H1250" class="line"/><text x="750" y="1052" class="body">Chốt/chấm và lưu kết quả duy nhất</text>
-  <path d="M725,1125 H225" class="line"/><text x="250" y="1112" class="body">SUBMIT_RESULT (điểm, số đúng, thông báo)</text>
-  <text x="250" y="1173" class="small">Hết giờ/dừng ca: Server cũng chốt bài đã lưu của sinh viên offline.</text>
-  <rect x="45" y="1235" width="1370" height="90" rx="10" fill="#e5ebf0"/>
-  <text x="65" y="1268" class="body">Mỗi frame: một dòng JSON UTF-8 {type, payload}. Heartbeat: PING / PONG mỗi 5 giây.</text>
-  <text x="65" y="1300" class="small">ERROR theo lỗi; mất kết nối cần đăng nhập lại. Các mũi tên DB rút gọn, không biểu diễn mọi truy vấn/phản hồi.</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1530" height="1780" viewBox="0 0 1530 1780">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="black"/></marker></defs>
+<rect width="1530" height="1780" fill="white"/>
+<g font-family="Arial, sans-serif" fill="black" stroke-linejoin="round">
+<text x="765.0" y="42" font-size="27" text-anchor="middle" font-weight="bold">Trình tự giao tiếp TCP trong một lượt thi</text>
+<rect x="75" y="70" width="290" height="52" fill="white" stroke="black" stroke-width="1.7"/>
+<text x="220" y="103" font-size="21" text-anchor="middle">:Client sinh viên</text>
+<polyline points="220,122 220,1650" fill="none" stroke="black" stroke-width="1.6" stroke-dasharray="7 6"/>
+<rect x="615" y="70" width="290" height="52" fill="white" stroke="black" stroke-width="1.7"/>
+<text x="760" y="103" font-size="21" text-anchor="middle">:Server / Service</text>
+<polyline points="760,122 760,1650" fill="none" stroke="black" stroke-width="1.6" stroke-dasharray="7 6"/>
+<rect x="1175" y="70" width="290" height="52" fill="white" stroke="black" stroke-width="1.7"/>
+<text x="1320" y="103" font-size="21" text-anchor="middle">:MySQL</text>
+<polyline points="1320,122 1320,1650" fill="none" stroke="black" stroke-width="1.6" stroke-dasharray="7 6"/>
+<polyline points="220,180 760,180" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="167" font-size="18" text-anchor="middle">Kết nối TCP (IP Server, cổng 5000)</text>
+<polyline points="220,235 760,235" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="222" font-size="18" text-anchor="middle">LOGIN (MSV, ngày sinh, khả năng Client)</text>
+<polyline points="760,290 1320,290" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1040.0" y="277" font-size="18" text-anchor="middle">Đọc hồ sơ, danh sách lớp và khóa</text>
+<polyline points="1320,335 760,335" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="1040.0" y="322" font-size="18" text-anchor="middle">Dữ liệu xác thực</text>
+<polyline points="760,350 830,350 830,377 760,377" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="847" y="368" font-size="18" text-anchor="start">Kiểm tra danh tính và quyền đăng nhập</text>
+<polyline points="760,410 220,410" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="490.0" y="397" font-size="18" text-anchor="middle">LOGIN_RESULT</text>
+<polyline points="760,460 220,460" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="447" font-size="18" text-anchor="middle">EXAM_AVAILABLE (ca phù hợp hoặc null)</text>
+<rect x="80" y="490" width="1390" height="1150" fill="none" stroke="black" stroke-width="1.7"/>
+<rect x="146" y="491" width="1322" height="29" fill="white"/>
+<rect x="80" y="490" width="65" height="30" fill="white" stroke="black" stroke-width="1.7"/>
+<text x="92" y="511" font-size="17" text-anchor="start" font-weight="bold">opt</text>
+<text x="160" y="513" font-size="18" text-anchor="start">Có ca được phép tham gia</text>
+<polyline points="220,550 760,550" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="537" font-size="18" text-anchor="middle">JOIN_EXAM (examId)</text>
+<polyline points="760,575 830,575 830,602 760,602" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="847" y="593" font-size="18" text-anchor="start">Kiểm tra quyền và hạn của ca</text>
+<polyline points="760,640 1320,640" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1040.0" y="627" font-size="18" text-anchor="middle">Đọc / tạo lượt làm; giữ danh sách và mã đề</text>
+<polyline points="1320,685 760,685" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="1040.0" y="672" font-size="18" text-anchor="middle">Lượt làm, mã đề, đáp án đã lưu</text>
+<polyline points="760,735 220,735" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="490.0" y="722" font-size="18" text-anchor="middle">EXAM_STARTED (đề, deadline, savedAnswers)</text>
+<rect x="80" y="760" width="1390" height="200" fill="none" stroke="black" stroke-width="1.7"/>
+<rect x="146" y="761" width="1322" height="29" fill="white"/>
+<rect x="80" y="760" width="65" height="30" fill="white" stroke="black" stroke-width="1.7"/>
+<text x="92" y="781" font-size="17" text-anchor="start" font-weight="bold">loop</text>
+<text x="160" y="783" font-size="18" text-anchor="start">Mỗi lần thay đổi lựa chọn</text>
+<polyline points="220,815 760,815" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="802" font-size="18" text-anchor="middle">ANSWER_UPDATE (examId, answers)</text>
+<polyline points="760,840 830,840 830,867 760,867" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="847" y="858" font-size="18" text-anchor="start">Kiểm tra câu hỏi và RequestReceipt</text>
+<polyline points="760,915 1320,915" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1040.0" y="902" font-size="18" text-anchor="middle">Lưu đáp án hợp lệ trong transaction</text>
+<rect x="80" y="995" width="1390" height="255" fill="none" stroke="black" stroke-width="1.7"/>
+<rect x="146" y="996" width="1322" height="29" fill="white"/>
+<rect x="80" y="995" width="65" height="30" fill="white" stroke="black" stroke-width="1.7"/>
+<text x="92" y="1016" font-size="17" text-anchor="start" font-weight="bold">opt</text>
+<text x="160" y="1018" font-size="18" text-anchor="start">Rời toàn màn hình / thu nhỏ / chuyển ứng dụng</text>
+<polyline points="220,1070 760,1070" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="1035" font-size="18" text-anchor="middle">EXAM_FOCUS_CHANGED (examId, episodeId, focused)</text>
+<text x="490.0" y="1057" font-size="18" text-anchor="middle">Gửi lại cùng mã sự kiện khi vẫn ở ngoài</text>
+<polyline points="760,1105 830,1105 830,1132 760,1132" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="847" y="1123" font-size="18" text-anchor="start">Đo đủ 5 giây; không đếm trùng sự kiện</text>
+<polyline points="760,1170 1320,1170" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1040.0" y="1157" font-size="18" text-anchor="middle">Lưu nhật ký rời màn hình</text>
+<polyline points="760,1225 220,1225" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="1212" font-size="18" text-anchor="middle">EXAM_WARNING_STATUS</text>
+<polyline points="220,1310 760,1310" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="490.0" y="1297" font-size="18" text-anchor="middle">SUBMIT_EXAM (examId, answers)</text>
+<polyline points="760,1360 830,1360 830,1387 760,1387" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="847" y="1378" font-size="18" text-anchor="start">Đối chiếu đáp án gốc và tính điểm</text>
+<polyline points="760,1450 1320,1450" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1040.0" y="1437" font-size="18" text-anchor="middle">Lưu Submission và StudentAnswer</text>
+<polyline points="1320,1500 760,1500" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="1040.0" y="1487" font-size="18" text-anchor="middle">Commit thành công</text>
+<polyline points="760,1580 220,1580" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<text x="490.0" y="1567" font-size="18" text-anchor="middle">SUBMIT_RESULT (điểm, số đúng, thông báo)</text>
+<text x="80" y="1684" font-size="20" text-anchor="start">Hết giờ / dừng ca: Server chấm đáp án đã lưu, kể cả sinh viên offline.</text>
+<text x="80" y="1717" font-size="19" text-anchor="start">ANSWER_UPDATE chưa có ACK riêng. Hình thể hiện luồng chính; xem PROTOCOL.md cho các message khác.</text>
+<text x="80" y="1750" font-size="19" text-anchor="start">Mọi frame Client–Server là một dòng JSON UTF-8 trên cùng kết nối TCP.</text>
+</g></svg>

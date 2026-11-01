@@ -6,8 +6,16 @@ $required = @(
     'report/README.md',
     'statics/architecture.svg', 'statics/architecture.png',
     'statics/protocol.svg', 'statics/protocol.png', 'statics/PROTOCOL.md',
+    'statics/protocol.puml', 'statics/DATA_MODEL.md', 'statics/REFERENCES.md',
+    'statics/class-students.svg', 'statics/class-students.png',
+    'statics/exam-data.svg', 'statics/exam-data.png',
+    'statics/exam-states.svg', 'statics/exam-states.png',
     'statics/results/README.md', 'statics/results/EXPERIMENT_PLAN.md',
-    'statics/results/full-tests-2026-10-31.txt',
+    'statics/results/functional-tests.txt', 'statics/results/benchmark-log.txt',
+    'statics/results/latency.png', 'statics/results/throughput.png',
+    'statics/results/benchmark/samples.csv', 'statics/results/benchmark/phases.csv',
+    'statics/results/benchmark/summary.csv', 'statics/results/benchmark/summary.json',
+    'statics/results/benchmark/environment.json', 'statics/results/benchmark/hardware.json',
     'statics/dataset/README.md', 'statics/dataset/question-bank-template.docx',
     'statics/dataset/Co_so_du_lieu_200_cau.docx',
     'statics/dataset/Lap_trinh_mang_200_cau.docx',
@@ -16,7 +24,7 @@ $required = @(
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $relative) -PathType Leaf)) { throw "Missing: $relative" }
 }
-$markdownFiles = @((Join-Path $projectRoot 'README.md'), (Join-Path $projectRoot 'report/README.md'))
+$markdownFiles = @((Join-Path $projectRoot 'README.md'), (Join-Path $projectRoot 'TOPICS.md'), (Join-Path $projectRoot 'report/README.md'))
 $markdownFiles += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'statics') -Filter '*.md' -Recurse -File | Select-Object -ExpandProperty FullName)
 foreach ($file in $markdownFiles) {
     foreach ($match in [regex]::Matches([IO.File]::ReadAllText($file), '!?\[[^\]]+\]\(([^)]+)\)')) {
@@ -26,7 +34,7 @@ foreach ($file in $markdownFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $file) $relative))) { throw "Broken local link in ${file}: $target" }
     }
 }
-foreach ($name in @('architecture', 'protocol')) {
+foreach ($name in @('architecture', 'protocol', 'class-students', 'exam-data', 'exam-states')) {
     $null = [xml][IO.File]::ReadAllText((Join-Path $projectRoot "statics/$name.svg"))
     $signature = [IO.File]::ReadAllBytes((Join-Path $projectRoot "statics/$name.png"))[0..7]
     if ([BitConverter]::ToString($signature) -ne '89-50-4E-47-0D-0A-1A-0A') { throw "Invalid PNG: $name" }
@@ -67,6 +75,18 @@ foreach ($name in @('Co_so_du_lieu_200_cau.docx', 'Lap_trinh_mang_200_cau.docx',
         Write-Output "$name : 200 question headings"
     } finally { $zip.Dispose() }
 }
-$log = [IO.File]::ReadAllText((Join-Path $projectRoot 'statics/results/full-tests-2026-10-31.txt'))
-if ($log -notmatch 'Tests run: 141, Failures: 0, Errors: 0, Skipped: 0' -or $log -notmatch 'BUILD SUCCESS') { throw 'Unexpected saved test result' }
+$log = [IO.File]::ReadAllText((Join-Path $projectRoot 'statics/results/functional-tests.txt'))
+if ($log -notmatch 'Tests run: 142, Failures: 0, Errors: 0, Skipped: 1' -or $log -notmatch 'BUILD SUCCESS') { throw 'Unexpected saved functional test result' }
+$benchmarkLog = [IO.File]::ReadAllText((Join-Path $projectRoot 'statics/results/benchmark-log.txt'))
+if ($benchmarkLog -notmatch 'Tests run: 1, Failures: 0, Errors: 0, Skipped: 0' -or $benchmarkLog -notmatch 'BUILD SUCCESS') { throw 'Unexpected saved benchmark result' }
+$samples = @(Import-Csv -LiteralPath (Join-Path $projectRoot 'statics/results/benchmark/samples.csv') -Encoding UTF8)
+if ($samples.Count -ne 3624 -or @($samples | Where-Object { $_.success -ne 'true' }).Count -ne 0) { throw 'Unexpected benchmark sample count or errors' }
+foreach ($phase in @('LOGIN', 'JOIN', 'UPDATE_BARRIER', 'SUBMIT')) {
+    $expected = if ($phase -eq 'UPDATE_BARRIER') { 2265 } else { 453 }
+    if (@($samples | Where-Object { $_.phase -eq $phase }).Count -ne $expected) { throw "Unexpected sample count: $phase" }
+}
+$phases = @(Import-Csv -LiteralPath (Join-Path $projectRoot 'statics/results/benchmark/phases.csv') -Encoding UTF8)
+$summary = @(Import-Csv -LiteralPath (Join-Path $projectRoot 'statics/results/benchmark/summary.csv') -Encoding UTF8)
+if ($phases.Count -ne 60 -or $summary.Count -ne 20 -or @($summary | Where-Object { [int]$_.errors -ne 0 }).Count -ne 0) { throw 'Unexpected benchmark aggregation' }
+Write-Output 'Saved evidence: 141 functional tests passed; benchmark has 3624 successful samples'
 Write-Output 'Submission assets: PASS (does not run benchmarks or validate report content)'

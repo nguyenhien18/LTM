@@ -1,0 +1,8 @@
+﻿{
+    "cpu":  "11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz",
+    "physical_cores":  8,
+    "logical_processors":  16,
+    "ram_bytes":  17007173632,
+    "os":  "Microsoft Windows 11 Home",
+    "os_version":  "10.0.26300"
+}

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1550" height="940" viewBox="0 0 1550 940">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="black"/></marker></defs>
+<rect width="1550" height="940" fill="white"/>
+<g font-family="Arial, sans-serif" fill="black" stroke-linejoin="round">
+<text x="775.0" y="42" font-size="27" text-anchor="middle" font-weight="bold">Trạng thái bài thi và trạng thái kết nối</text>
+<rect x="50" y="160" width="285" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="192.5" y="191" font-size="23" text-anchor="middle" font-weight="bold">Chưa vào bài</text>
+<text x="68" y="236" font-size="20" text-anchor="start">Có trong danh sách ca</text>
+<text x="68" y="267" font-size="20" text-anchor="start">Chưa có lượt làm</text>
+<rect x="450" y="160" width="285" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="592.5" y="191" font-size="23" text-anchor="middle" font-weight="bold">Đang làm</text>
+<text x="468" y="236" font-size="20" text-anchor="start">Lượt làm còn hạn</text>
+<text x="468" y="267" font-size="20" text-anchor="start">Đáp án lưu ở Server</text>
+<rect x="1150" y="70" width="340" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="1320.0" y="101" font-size="23" text-anchor="middle" font-weight="bold">Đã nộp</text>
+<text x="1168" y="146" font-size="20" text-anchor="start">Nộp chủ động, đã có kết quả</text>
+<text x="1168" y="177" font-size="20" text-anchor="start">Không sửa bài đã chấm</text>
+<rect x="50" y="485" width="285" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="192.5" y="516" font-size="23" text-anchor="middle" font-weight="bold">Vắng thi</text>
+<text x="68" y="561" font-size="20" text-anchor="start">Hết hạn, chưa vào bài</text>
+<text x="68" y="592" font-size="20" text-anchor="start">Điểm để trống</text>
+<rect x="800" y="360" width="285" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="942.5" y="391" font-size="23" text-anchor="middle" font-weight="bold">Đang chấm</text>
+<text x="818" y="436" font-size="20" text-anchor="start">Đã chốt hạn</text>
+<text x="818" y="467" font-size="20" text-anchor="start">Chờ lưu/chấm hoàn tất</text>
+<rect x="1150" y="360" width="340" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="1320.0" y="391" font-size="23" text-anchor="middle" font-weight="bold">Hết giờ — đã chấm</text>
+<text x="1168" y="436" font-size="20" text-anchor="start">Đã lưu kết quả tự chấm</text>
+<text x="1168" y="467" font-size="20" text-anchor="start">Kể cả sinh viên offline</text>
+<rect x="450" y="650" width="320" height="125" fill="white" stroke="black" stroke-width="1.7" rx="9"/>
+<text x="610.0" y="681" font-size="23" text-anchor="middle" font-weight="bold">Vi phạm quy chế</text>
+<text x="468" y="726" font-size="20" text-anchor="start">Giảng viên đình chỉ có lý do</text>
+<text x="468" y="757" font-size="20" text-anchor="start">Điểm 0, giữ bài để đối chiếu</text>
+<polyline points="335,220 450,220" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="392" y="196" font-size="19" text-anchor="middle">Vào bài</text>
+<polyline points="192,285 192,485" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="207" y="390" font-size="19" text-anchor="start">Hết hạn</text>
+<polyline points="735,200 1040,200 1040,132 1150,132" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="910" y="174" font-size="19" text-anchor="middle">Nộp sớm</text>
+<polyline points="735,250 770,250 770,422 800,422" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="825" y="303" font-size="19" text-anchor="start">Hết giờ / dừng ca</text>
+<polyline points="1085,422 1150,422" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1118" y="337" font-size="18" text-anchor="middle">Lưu xong</text>
+<polyline points="590,285 590,650" fill="none" stroke="black" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="605" y="555" font-size="19" text-anchor="start">Giảng viên đình chỉ</text>
+<text x="50" y="845" font-size="22" text-anchor="start">Online / Offline là trạng thái kết nối TCP, được theo dõi riêng với trạng thái bài thi.</text>
+<text x="50" y="884" font-size="21" text-anchor="start">Mất kết nối không tự biến thành Vắng thi hoặc Vi phạm quy chế.</text>
+</g></svg>

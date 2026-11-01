@@ -1,0 +1,91 @@
+[INFO] Scanning for projects...
+[INFO]
+[INFO] ----------------------< com.ptit:lan-exam-system >----------------------
+[INFO] Building LAN Exam System 1.0.0
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- resources:3.3.1:resources (default-resources) @ lan-exam-system ---
+[INFO] Copying 4 resources from src\main\resources to output\thuc-nghiem-20261101-140213\build\classes
+[INFO]
+[INFO] --- compiler:3.13.0:compile (default-compile) @ lan-exam-system ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 93 source files with javac [debug release 21] to output\thuc-nghiem-20261101-140213\build\classes
+[INFO] /D:/Downloads/LAN_Exam_System/LAN_Exam_System/src/main/java/com/ptit/lanexam/server/ExamEditorDialog.java: Some input files use or override a deprecated API.
+[INFO] /D:/Downloads/LAN_Exam_System/LAN_Exam_System/src/main/java/com/ptit/lanexam/server/ExamEditorDialog.java: Recompile with -Xlint:deprecation for details.
+[INFO]
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ lan-exam-system ---
+[INFO] Copying 1 resource from src\test\resources to output\thuc-nghiem-20261101-140213\build\test-classes
+[INFO]
+[INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ lan-exam-system ---
+[INFO] Recompiling the module because of changed dependency.
+[INFO] Compiling 21 source files with javac [debug release 21] to output\thuc-nghiem-20261101-140213\build\test-classes
+[INFO] /D:/Downloads/LAN_Exam_System/LAN_Exam_System/src/test/java/com/ptit/lanexam/client/ExamWorkflowUiTest.java: D:\Downloads\LAN_Exam_System\LAN_Exam_System\src\test\java\com\ptit\lanexam\client\ExamWorkflowUiTest.java uses unchecked or unsafe operations.
+[INFO] /D:/Downloads/LAN_Exam_System/LAN_Exam_System/src/test/java/com/ptit/lanexam/client/ExamWorkflowUiTest.java: Recompile with -Xlint:unchecked for details.
+[INFO]
+[INFO] --- surefire:3.2.5:test (default-test) @ lan-exam-system ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO]
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running com.ptit.lanexam.server.service.ReportBenchmarkTest
+mvn : Nov 01, 2026 2:02:42 PM org.hibernate.jpa.internal.util.LogHelper logPersistenceUnitInformation
+At line:1 char:1
++ mvn "-Dlanexam.build.directory=$thuMucDo/build" "-Dtest=ReportBenchma ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Nov 01, 2026 2:...UnitInformation:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+INFO: HHH000204: Processing PersistenceUnitInfo [name: lan-exam-pu]
+Nov 01, 2026 2:02:43 PM org.hibernate.Version logVersion
+INFO: HHH000412: Hibernate ORM core version 6.6.5.Final
+Nov 01, 2026 2:02:43 PM org.hibernate.cache.internal.RegionFactoryInitiator initiateService
+INFO: HHH000026: Second-level cache disabled
+Nov 01, 2026 2:02:43 PM org.hibernate.engine.jdbc.connections.internal.DriverManagerConnectionProviderImpl configure
+WARN: HHH10001002: Using built-in connection pool (not intended for production use)
+Nov 01, 2026 2:02:43 PM org.hibernate.engine.jdbc.dialect.internal.DialectFactoryImpl constructDialect
+WARN: HHH90000025: H2Dialect does not need to be specified explicitly using 'hibernate.dialect' (remove the property
+setting and it will be selected by default)
+Nov 01, 2026 2:02:43 PM org.hibernate.engine.jdbc.env.internal.JdbcEnvironmentInitiator initiateService
+INFO: HHH10001005: Database info:
+	Database JDBC URL [jdbc:h2:mem:report_3f9544b9-a65c-4f0a-8766-0948b866ac71;MODE=MySQL]
+	Database driver: org.h2.Driver
+	Database version: 2.3.232
+	Autocommit mode: false
+	Isolation level: undefined/unknown
+	Minimum pool size: 1
+	Maximum pool size: 20
+Nov 01, 2026 2:02:44 PM org.hibernate.engine.transaction.jta.platform.internal.JtaPlatformInitiator initiateService
+INFO: HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform
+integration)
+Nov 01, 2026 2:02:44 PM org.hibernate.resource.transaction.backend.jdbc.internal.DdlTransactionIsolatorNonJtaImpl
+getIsolatedConnection
+INFO: HHH10001501: Connection obtained from JdbcConnectionAccess
+[org.hibernate.engine.jdbc.env.internal.JdbcEnvironmentInitiator$ConnectionProviderJdbcConnectionAccess@3980b44f] for
+(non-JTA) DDL execution was not in auto-commit mode; the Connection 'local transaction' will be committed and the
+Connection will be set into auto-commit mode.
+Nov 01, 2026 2:02:44 PM org.hibernate.resource.transaction.backend.jdbc.internal.DdlTransactionIsolatorNonJtaImpl
+getIsolatedConnection
+INFO: HHH10001501: Connection obtained from JdbcConnectionAccess
+[org.hibernate.engine.jdbc.env.internal.JdbcEnvironmentInitiator$ConnectionProviderJdbcConnectionAccess@7852ab30] for
+(non-JTA) DDL execution was not in auto-commit mode; the Connection 'local transaction' will be committed and the
+Connection will be set into auto-commit mode.
+Nov 01, 2026 2:02:50 PM org.hibernate.resource.transaction.backend.jdbc.internal.DdlTransactionIsolatorNonJtaImpl
+getIsolatedConnection
+INFO: HHH10001501: Connection obtained from JdbcConnectionAccess
+[org.hibernate.engine.jdbc.env.internal.JdbcEnvironmentInitiator$ConnectionProviderJdbcConnectionAccess@1dde5b0a] for
+(non-JTA) DDL execution was not in auto-commit mode; the Connection 'local transaction' will be committed and the
+Connection will be set into auto-commit mode.
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.496 s -- in com.ptit.lanexam.server.service.ReportBenchmarkTest
+[INFO]
+[INFO] Results:
+[INFO]
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+[INFO]
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  14.070 s
+[INFO] Finished at: 2026-11-01T14:02:50+07:00
+[INFO] ------------------------------------------------------------------------

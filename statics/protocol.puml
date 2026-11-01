@@ -1,0 +1,71 @@
+@startuml
+hide footbox
+skinparam monochrome true
+skinparam shadowing false
+skinparam roundcorner 0
+skinparam sequenceMessageAlign center
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam ParticipantPadding 65
+skinparam BoxPadding 15
+title Luồng thi trắc nghiệm qua TCP và lưu trạng thái
+participant ":Client sinh viên" as C
+participant ":Server / Service" as S
+database ":MySQL" as D
+C ->> S : Kết nối TCP (IP Server, cổng 5000)
+C -> S : LOGIN (MSV, ngày sinh, khả năng Client)
+activate S
+S -> D : Đọc hồ sơ, danh sách lớp và khóa
+S -> S : Kiểm tra danh tính và quyền đăng nhập
+activate D
+D --> S : Kết quả kiểm tra
+deactivate D
+S --> C : LOGIN_RESULT
+deactivate S
+S ->> C : EXAM_AVAILABLE (ca được phép hoặc null)
+opt Có ca thi được phép tham gia
+  C -> S : JOIN_EXAM (examId)
+  activate S
+  S -> S : Kiểm tra danh sách và hạn
+  S -> D : Tạo / đọc lượt và mã đề
+  activate D
+  D --> S : Lượt làm, mã đề và đáp án đã lưu
+  deactivate D
+  S --> C : EXAM_STARTED (đề, deadline, savedAnswers)
+  deactivate S
+  loop Mỗi lần thay đổi đáp án
+    C -> S : ANSWER_UPDATE (examId, answers)
+    activate S
+    S -> D : Lưu lựa chọn hợp lệ theo RequestReceipt
+    activate D
+    D --> S : Hoàn tất lưu
+    deactivate D
+    deactivate S
+  end
+  opt Rời toàn màn hình / thu nhỏ / chuyển ứng dụng
+    C -> S : EXAM_FOCUS_CHANGED (examId, episodeId, focused)\nBáo lúc rời; gửi lại cùng episodeId để xác nhận đủ 5 giây
+    activate S
+    S -> S : Đo đủ 5 giây; không đếm trùng
+    S -> D : Lưu nhật ký rời màn hình
+    activate D
+    D --> S : Trạng thái cảnh báo đã lưu
+    deactivate D
+    S ->> C : EXAM_WARNING_STATUS
+    deactivate S
+  end
+  C -> S : SUBMIT_EXAM (examId, answers)
+  activate S
+  S -> S : Đối chiếu đáp án gốc và tính điểm
+  S -> D : Lưu Submission và StudentAnswer trong transaction
+  activate D
+  D --> S : Kết quả bài thi
+  deactivate D
+  S --> C : SUBMIT_RESULT (điểm, số đúng, thông báo)
+  deactivate S
+end
+note over C,D
+Hết giờ / dừng ca: Server chốt và chấm đáp án đã lưu, kể cả sinh viên offline.
+ANSWER_UPDATE chưa có ACK riêng về Client; "Hoàn tất lưu" chỉ là phản hồi từ MySQL.
+Các thông điệp Client–Server dùng JSON Lines trên cùng kết nối TCP.
+end note
+@enduml

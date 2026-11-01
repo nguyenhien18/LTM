@@ -1,0 +1,12 @@
+{
+  "started_utc" : "2026-11-01T07:02:42.799453200Z",
+  "finished_utc" : "2026-11-01T07:02:50.211634900Z",
+  "java" : "21.0.8",
+  "os" : "Windows 11",
+  "os_version" : "10.0",
+  "processors" : 16,
+  "max_heap_bytes" : 4253024256,
+  "database" : "H2 2.3.232 in-memory MODE=MySQL; pool max 20",
+  "network" : "TCP 127.0.0.1, ephemeral port; client and server same JVM",
+  "workload" : "30 questions; one original variant; 3 repetitions; 5 updates per client; 5-client warm-up excluded; virtual-thread raw TCP clients; no JavaFX rendering"
+}
